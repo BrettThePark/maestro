@@ -132,7 +132,15 @@ function App() {
 
   // Global keyboard shortcuts for tab management (Cmd+T, Cmd+W, Cmd+{, Cmd+})
   const handleNewSession = useCallback(() => {
-    multiProjectRef.current?.addSessionToActiveProject();
+    const { tabs: currentTabs, setSessionsLaunched: setLaunched } = useWorkspaceStore.getState();
+    const active = currentTabs.find((t) => t.active);
+    if (!active) return;
+    if (!active.sessionsLaunched) {
+      // Enter grid view — TerminalGrid auto-creates the first slot on mount
+      setLaunched(active.id, true);
+    } else {
+      multiProjectRef.current?.addSessionToActiveProject();
+    }
   }, []);
 
   const handleCloseSession = useCallback(() => {
