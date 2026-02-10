@@ -1,9 +1,8 @@
-import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import { QuickActionsManager } from "@/components/quickactions/QuickActionsManager";
@@ -14,7 +13,6 @@ import { DEFAULT_THEME, LIGHT_THEME, toXtermTheme } from "@/lib/terminalTheme";
 import { useMcpStore } from "@/stores/useMcpStore";
 import { type AiMode, type BackendSessionStatus, useSessionStore } from "@/stores/useSessionStore";
 import { useTerminalSettingsStore } from "@/stores/useTerminalSettingsStore";
-import { useShallow } from "zustand/react/shallow";
 import { QuickActionPills } from "./QuickActionPills";
 import { type AIProvider, type SessionStatus, TerminalHeader } from "./TerminalHeader";
 
@@ -23,7 +21,6 @@ import { type AIProvider, type SessionStatus, TerminalHeader } from "./TerminalH
  * @property sessionId - Backend PTY session ID used to route stdin/stdout and resize events.
  * @property status - Fallback status used only when the session store has no entry yet.
  * @property isFocused - Whether this terminal is currently focused (shows accent ring).
- * @property isActive - Whether this terminal is in the active project tab (throttles background polling).
  * @property onFocus - Callback when the terminal is clicked/focused.
  * @property onKill - Callback invoked after the backend kill IPC completes (or fails).
  */
@@ -31,7 +28,6 @@ interface TerminalViewProps {
   sessionId: number;
   status?: SessionStatus;
   isFocused?: boolean;
-  isActive?: boolean;
   onFocus?: () => void;
   onKill: (sessionId: number) => void;
   terminalCount?: number;
@@ -104,43 +100,17 @@ function cellStatusClass(status: SessionStatus): string {
  * ResizeObserver, disposes xterm listeners, unsubscribes the Tauri event listener
  * (even if the listener promise hasn't resolved yet), and destroys the Terminal.
  */
-export const TerminalView = memo(function TerminalView({
-  sessionId,
-  status = "idle",
-  isFocused = false,
-  isActive = true,
-  onFocus,
-  onKill,
-  terminalCount = 1,
-  isZoomed = false,
-  onToggleZoom,
-}: TerminalViewProps) {
-  const sessionData = useSessionStore(
-    useShallow((s) => {
-      const sess = s.sessions.find((x) => x.id === sessionId);
-      if (!sess) return null;
-      return {
-        status: sess.status,
-        mode: sess.mode,
-        projectPath: sess.project_path,
-        worktreePath: sess.worktree_path,
-        branch: sess.branch,
-        statusMessage: sess.statusMessage,
-        needsInputPrompt: sess.needsInputPrompt,
-      };
-    })
-  );
-  const effectiveStatus = sessionData ? mapStatus(sessionData.status) : status;
-  const effectiveProvider = sessionData ? mapAiMode(sessionData.mode) : "claude";
-  const isWorktree = Boolean(sessionData?.worktreePath);
-  const projectPath = sessionData?.projectPath ?? "";
-  const liveBranch = useSessionBranch(projectPath, isWorktree, sessionData?.branch ?? null, isActive);
+export function TerminalView({ sessionId, status = "idle", isFocused = false, onFocus, onKill, terminalCount = 1, isZoomed = false, onToggleZoom }: TerminalViewProps) {
+  const sessionConfig = useSessionStore((s) => s.sessions.find((sess) => sess.id === sessionId));
+  const effectiveStatus = sessionConfig ? mapStatus(sessionConfig.status) : status;
+  const effectiveProvider = sessionConfig ? mapAiMode(sessionConfig.mode) : "claude";
+  const isWorktree = Boolean(sessionConfig?.worktree_path);
+  const projectPath = sessionConfig?.project_path ?? "";
+  const liveBranch = useSessionBranch(projectPath, isWorktree, sessionConfig?.branch ?? null);
   const effectiveBranch = liveBranch ?? "...";
 
-  // Get terminal settings from store (select individual primitives for granular updates)
-  const fontSize = useTerminalSettingsStore((s) => s.settings.fontSize);
-  const fontFamily = useTerminalSettingsStore((s) => s.settings.fontFamily);
-  const lineHeight = useTerminalSettingsStore((s) => s.settings.lineHeight);
+  // Get terminal settings from store
+  const terminalSettings = useTerminalSettingsStore((s) => s.settings);
   const getEffectiveFontFamily = useTerminalSettingsStore((s) => s.getEffectiveFontFamily);
 
   // Get MCP count for this session (primitive values are stable, no reference issues)
@@ -155,7 +125,6 @@ export const TerminalView = memo(function TerminalView({
 
   // Quick actions manager modal state
   const [showQuickActionsManager, setShowQuickActionsManager] = useState(false);
-  const handleManageClick = useCallback(() => setShowQuickActionsManager(true), []);
 
   // Backend capabilities (for future enhanced features like terminal state queries)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -200,11 +169,11 @@ export const TerminalView = memo(function TerminalView({
   useEffect(() => {
     if (termRef.current && fitAddonRef.current) {
       const effectiveFont = getEffectiveFontFamily();
-      const builtFontFamily = buildFontFamily(effectiveFont);
+      const fontFamily = buildFontFamily(effectiveFont);
 
-      termRef.current.options.fontSize = fontSize;
-      termRef.current.options.fontFamily = builtFontFamily;
-      termRef.current.options.lineHeight = lineHeight;
+      termRef.current.options.fontSize = terminalSettings.fontSize;
+      termRef.current.options.fontFamily = fontFamily;
+      termRef.current.options.lineHeight = terminalSettings.lineHeight;
 
       // Refit terminal to recalculate cell dimensions
       requestAnimationFrame(() => {
@@ -215,7 +184,7 @@ export const TerminalView = memo(function TerminalView({
         }
       });
     }
-  }, [fontSize, fontFamily, lineHeight, getEffectiveFontFamily]);
+  }, [terminalSettings.fontSize, terminalSettings.fontFamily, terminalSettings.lineHeight, getEffectiveFontFamily]);
 
   /**
    * Immediately removes the terminal from UI (optimistic update),
@@ -303,9 +272,6 @@ export const TerminalView = memo(function TerminalView({
       if (disposed) return;
 
       const initialTheme = document.documentElement.getAttribute("data-theme") === "light" ? LIGHT_THEME : DEFAULT_THEME;
-      // Reduce scrollback on Linux where the DOM renderer is slow in WebKitGTK.
-      // 10000 lines of scrollback with the DOM renderer causes severe lag.
-      const isLinux = navigator.userAgent.toLowerCase().includes("linux");
       term = new Terminal({
         cursorBlink: true,
         fontSize: currentSettings.settings.fontSize,
@@ -313,7 +279,7 @@ export const TerminalView = memo(function TerminalView({
         lineHeight: currentSettings.settings.lineHeight,
         theme: toXtermTheme(initialTheme),
         allowProposedApi: true,
-        scrollback: isLinux ? 2000 : 10000,
+        scrollback: 10000,
         tabStopWidth: 8,
       });
 
@@ -324,22 +290,15 @@ export const TerminalView = memo(function TerminalView({
       term.loadAddon(webLinksAddon);
       term.open(container);
 
-      // GPU-accelerated rendering (must be loaded after open())
-      // Try WebGL first, fall back to Canvas2D (much faster than DOM on Linux)
+      // WebGL addon for faster rendering (must be loaded after open())
       try {
         const webglAddon = new WebglAddon();
         webglAddon.onContextLoss(() => {
           webglAddon.dispose();
-          try {
-            term?.loadAddon(new CanvasAddon());
-          } catch { /* DOM renderer as final fallback */ }
         });
         term.loadAddon(webglAddon);
       } catch {
-        // WebGL not available — use Canvas2D renderer
-        try {
-          term.loadAddon(new CanvasAddon());
-        } catch { /* DOM renderer as final fallback */ }
+        // WebGL not available, fall back to canvas renderer (default)
       }
 
       termRef.current = term;
@@ -376,24 +335,6 @@ export const TerminalView = memo(function TerminalView({
           const selection = term.getSelection();
           navigator.clipboard.writeText(selection).catch(console.error);
           return false; // Don't send to PTY
-        }
-
-        // Cmd+Left/Right (Mac): jump to beginning/end of line
-        // Cmd+Delete (Mac): delete from cursor to beginning of line
-        // WebView intercepts Cmd+key by default, so we manually send the escape sequences
-        if (event.metaKey && event.type === "keydown") {
-          if (event.key === "ArrowLeft") {
-            writeStdin(sessionId, "\x01").catch(console.error); // Ctrl+A: beginning of line
-            return false;
-          }
-          if (event.key === "ArrowRight") {
-            writeStdin(sessionId, "\x05").catch(console.error); // Ctrl+E: end of line
-            return false;
-          }
-          if (event.key === "Backspace") {
-            writeStdin(sessionId, "\x15").catch(console.error); // Ctrl+U: delete to beginning of line
-            return false;
-          }
         }
 
         return true; // Let xterm handle all other keys
@@ -481,7 +422,7 @@ export const TerminalView = memo(function TerminalView({
         sessionId={sessionId}
         provider={effectiveProvider}
         status={effectiveStatus}
-        statusMessage={sessionData?.statusMessage || sessionData?.needsInputPrompt}
+        statusMessage={sessionConfig?.statusMessage || sessionConfig?.needsInputPrompt}
         mcpCount={mcpCount}
         branchName={effectiveBranch}
         isWorktree={isWorktree}
@@ -497,7 +438,7 @@ export const TerminalView = memo(function TerminalView({
       {/* Quick action pills */}
       <QuickActionPills
         onAction={handleQuickAction}
-        onManageClick={handleManageClick}
+        onManageClick={() => setShowQuickActionsManager(true)}
       />
 
       {/* Quick actions manager modal */}
@@ -506,4 +447,4 @@ export const TerminalView = memo(function TerminalView({
       )}
     </div>
   );
-});
+}

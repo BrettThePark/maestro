@@ -10,7 +10,6 @@ import {
   saveBranchConfig,
   setSessionPlugins,
   setSessionSkills,
-  writeSessionPluginConfig,
   type PluginConfig,
   type SkillConfig,
 } from "@/lib/plugins";
@@ -123,7 +122,6 @@ function createEmptySlot(
 export interface TerminalGridHandle {
   addSession: () => void;
   launchAll: () => Promise<void>;
-  refreshBranches: () => void;
 }
 
 /**
@@ -147,9 +145,7 @@ interface TerminalGridProps {
   onRepoChange?: (path: string) => void;
   tabId?: string;
   preserveOnHide?: boolean;
-  isActive?: boolean;
   onSessionCountChange?: (slotCount: number, launchedCount: number) => void;
-  onAllSessionsClosed?: () => void;
 }
 
 /**
@@ -166,7 +162,7 @@ interface TerminalGridProps {
  *   a fresh slot so the user is never left with an empty grid.
  */
 export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(function TerminalGrid(
-  { projectPath, repoPath, repositories, workspaceType, onRepoChange, tabId, preserveOnHide = false, isActive = true, onSessionCountChange, onAllSessionsClosed },
+  { projectPath, repoPath, repositories, workspaceType, onRepoChange, tabId, preserveOnHide = false, onSessionCountChange },
   ref,
 ) {
   // Use repoPath for git operations, falling back to projectPath
@@ -210,18 +206,6 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   const mounted = useRef(false);
   // Track debounce timers for saving branch config (keyed by slot ID)
   const branchConfigSaveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-
-  // Stable per-slot focus callbacks — avoids creating new arrow functions on every render,
-  // which would defeat React.memo on TerminalView.
-  const focusCallbacksRef = useRef(new Map<string, () => void>());
-  const getFocusCallback = useCallback((slotId: string) => {
-    let cb = focusCallbacksRef.current.get(slotId);
-    if (!cb) {
-      cb = () => setFocusedSlotId(slotId);
-      focusCallbacksRef.current.set(slotId, cb);
-    }
-    return cb;
-  }, []);
 
   // Compute launched slots for keyboard navigation
   const launchedSlots = useMemo(
@@ -267,8 +251,8 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     onSessionCountChange?.(slots.length, launchedCount);
   }, [slots, onSessionCountChange]);
 
-  // Refresh branches callback (used by useEffect and exposed via handle)
-  const refreshBranches = useCallback(() => {
+  // Fetch branches when effectiveRepoPath is available
+  useEffect(() => {
     if (!effectiveRepoPath) {
       setIsGitRepo(false);
       return;
@@ -288,14 +272,6 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       });
   }, [effectiveRepoPath]);
 
-  // Fetch branches when effectiveRepoPath is available
-  // Lazy Load: Only fetch project metadata if the tab is active.
-  // This prevents background projects from triggering macOS permission prompts on boot.
-  useEffect(() => {
-    if (!isActive) return;
-    refreshBranches();
-  }, [refreshBranches, isActive]);
-
   // Fetch MCP servers and plugins when projectPath is available
   useEffect(() => {
     if (!projectPath) return;
@@ -305,7 +281,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
     // Fetch plugins/skills
     fetchPlugins(projectPath).catch(console.error);
-  }, [projectPath, isActive, fetchMcpServers, fetchPlugins]);
+  }, [projectPath, fetchMcpServers, fetchPlugins]);
 
   // Update slot enabled MCP servers when servers are fetched
   useEffect(() => {
@@ -366,16 +342,12 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     };
   }, [preserveOnHide]);
 
-  // When all slots are removed: either return to idle landing view or respawn a slot
+  // Auto-respawn a slot when all slots are removed (not on initial mount)
   useEffect(() => {
     if (slots.length === 0 && mounted.current && !error) {
-      if (onAllSessionsClosed) {
-        onAllSessionsClosed();
-      } else {
-        setSlots([createEmptySlot(mcpServers, skills, plugins)]);
-      }
+      setSlots([createEmptySlot(mcpServers, skills, plugins)]);
     }
-  }, [slots.length, error, mcpServers, skills, plugins, onAllSessionsClosed]);
+  }, [slots.length, error, mcpServers, skills, plugins]);
 
   /**
    * Saves branch config with debouncing.
@@ -565,18 +537,9 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
                 // Non-fatal - continue with CLI launch, MCP servers just won't be available
               }
 
-              // Write plugin enabled/disabled state to settings.local.json
-              // Uses enabledPlugins format (not the legacy plugins array)
-              try {
-                await writeSessionPluginConfig(
-                  workingDirectory,
-                  projectPath ?? workingDirectory,
-                  slot.enabledPlugins
-                );
-              } catch (err) {
-                console.error("Failed to write plugin config:", err);
-                // Non-fatal - continue with CLI launch
-              }
+              // NOTE: We no longer write plugin config to settings.local.json
+              // Claude CLI auto-discovers plugins from ~/.claude/plugins/
+              // Writing a `plugins` array was interfering with auto-discovery
             }
 
             // Wait for xterm.js to mount and start listening for PTY output
@@ -654,11 +617,6 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     const worktreePath = slot?.worktreePath;
     const workingDir = worktreePath || projectPath;
 
-    // Clean up cached focus callback for this slot
-    if (slot) {
-      focusCallbacksRef.current.delete(slot.id);
-    }
-
     setSlots((prev) => prev.filter((s) => s.sessionId !== sessionId));
 
     // Remove session from the session store
@@ -682,17 +640,14 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     // Clean up worktree if one was created (fire-and-forget)
     // Use effectiveRepoPath for worktree cleanup since worktrees are git-repo specific
     if (effectiveRepoPath && worktreePath) {
-      cleanupSessionWorktree(effectiveRepoPath, worktreePath)
-        .then(() => refreshBranches())
-        .catch(console.error);
+      cleanupSessionWorktree(effectiveRepoPath, worktreePath).catch(console.error);
     }
-  }, [tabId, effectiveRepoPath, projectPath, removeSessionFromProject, refreshBranches]);
+  }, [tabId, effectiveRepoPath, projectPath, removeSessionFromProject]);
 
   /**
    * Removes a pre-launch slot (before it's launched).
    */
   const removeSlot = useCallback((slotId: string) => {
-    focusCallbacksRef.current.delete(slotId);
     setSlots((prev) => prev.filter((s) => s.id !== slotId));
   }, []);
 
@@ -891,28 +846,9 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       if (prev.length >= MAX_SESSIONS) return prev;
       return [...prev, createEmptySlot(mcpServers, skills, plugins)];
     });
-    // Refresh branch list so new slots see the latest branches
-    refreshBranches();
-  }, [mcpServers, skills, plugins, refreshBranches]);
+  }, [mcpServers, skills, plugins]);
 
-  useImperativeHandle(ref, () => ({ addSession, launchAll, refreshBranches }), [addSession, launchAll, refreshBranches]);
-
-  // Handle zoom toggle for a slot
-  const handleToggleZoom = useCallback((slotId: string) => {
-    setZoomedSlotId(prev => prev === slotId ? null : slotId);
-  }, []);
-
-  // Handle Escape key to exit zoom mode
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && zoomedSlotId) {
-        handleToggleZoom(zoomedSlotId);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [zoomedSlotId, handleToggleZoom]);
+  useImperativeHandle(ref, () => ({ addSession, launchAll }), [addSession, launchAll]);
 
   if (error) {
     return (
@@ -939,6 +875,23 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       </div>
     );
   }
+
+  // Handle zoom toggle for a slot
+  const handleToggleZoom = useCallback((slotId: string) => {
+    setZoomedSlotId(prev => prev === slotId ? null : slotId);
+  }, []);
+
+  // Handle Escape key to exit zoom mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && zoomedSlotId) {
+        handleToggleZoom(zoomedSlotId);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [zoomedSlotId, handleToggleZoom]);
 
   // If a terminal is zoomed, show only that one at full screen with navigation bar
   if (zoomedSlotId) {
@@ -1050,8 +1003,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
             key={slot.id}
             sessionId={slot.sessionId}
             isFocused={focusedSlotId === slot.id}
-            isActive={isActive}
-            onFocus={getFocusCallback(slot.id)}
+            onFocus={() => setFocusedSlotId(slot.id)}
             onKill={handleKill}
             terminalCount={slots.length}
             isZoomed={false}

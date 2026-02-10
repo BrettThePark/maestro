@@ -10,7 +10,6 @@ interface MultiProjectViewProps {
 export interface MultiProjectViewHandle {
   addSessionToActiveProject: () => void;
   launchAllInActiveProject: () => Promise<void>;
-  refreshBranchesInActiveProject: () => void;
 }
 
 /**
@@ -44,13 +43,6 @@ export const MultiProjectView = forwardRef<MultiProjectViewHandle, MultiProjectV
         await gridRef?.launchAll();
       }
     },
-    refreshBranchesInActiveProject: () => {
-      const activeTab = tabs.find((t) => t.active);
-      if (activeTab) {
-        const gridRef = gridRefs.current.get(activeTab.id);
-        gridRef?.refreshBranches();
-      }
-    },
   }), [tabs]);
 
   // Create stable callbacks per tab to avoid infinite re-render loops
@@ -71,17 +63,6 @@ export const MultiProjectView = forwardRef<MultiProjectViewHandle, MultiProjectV
     for (const tab of tabs) {
       callbacks.set(tab.id, () => {
         setSessionsLaunched(tab.id, true);
-      });
-    }
-    return callbacks;
-  }, [tabs, setSessionsLaunched]);
-
-  // Stable all-sessions-closed callbacks per tab
-  const allSessionsClosedCallbacks = useMemo(() => {
-    const callbacks = new Map<string, () => void>();
-    for (const tab of tabs) {
-      callbacks.set(tab.id, () => {
-        setSessionsLaunched(tab.id, false);
       });
     }
     return callbacks;
@@ -150,9 +131,7 @@ export const MultiProjectView = forwardRef<MultiProjectViewHandle, MultiProjectV
               workspaceType={tab.workspaceType}
               onRepoChange={repoChangeCallbacks.get(tab.id)}
               preserveOnHide={true}
-              isActive={tab.active}
               onSessionCountChange={sessionCountChangeCallbacks.get(tab.id)}
-              onAllSessionsClosed={allSessionsClosedCallbacks.get(tab.id)}
             />
           ) : (
             <IdleLandingView onAdd={launchCallbacks.get(tab.id)!} />
