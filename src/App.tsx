@@ -8,6 +8,7 @@ import { useSessionStore } from "@/stores/useSessionStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 import { useGitStore } from "./stores/useGitStore";
 import { useTerminalSettingsStore } from "./stores/useTerminalSettingsStore";
+import { useAppKeyboard } from "./hooks/useAppKeyboard";
 import { useSwipeNavigation } from "./hooks/useSwipeNavigation";
 import { GitGraphPanel } from "./components/git/GitGraphPanel";
 import { BottomBar } from "./components/shared/BottomBar";
@@ -127,6 +128,22 @@ function App() {
     onSwipeLeft: switchToNextTab,
     onSwipeRight: switchToPrevTab,
     enabled: tabs.length >= 2,
+  });
+
+  // Global keyboard shortcuts for tab management (Cmd+T, Cmd+W, Cmd+{, Cmd+})
+  const handleNewSession = useCallback(() => {
+    multiProjectRef.current?.addSessionToActiveProject();
+  }, []);
+
+  const handleCloseSession = useCallback(() => {
+    multiProjectRef.current?.closeFocusedSessionInActiveProject();
+  }, []);
+
+  useAppKeyboard({
+    onNewSession: handleNewSession,
+    onNextTab: switchToNextTab,
+    onPrevTab: switchToPrevTab,
+    onCloseSession: handleCloseSession,
   });
 
   // Git store for commit count and refresh

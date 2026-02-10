@@ -10,6 +10,8 @@ interface MultiProjectViewProps {
 export interface MultiProjectViewHandle {
   addSessionToActiveProject: () => void;
   launchAllInActiveProject: () => Promise<void>;
+  /** Close/kill the focused terminal session in the active project. */
+  closeFocusedSessionInActiveProject: () => void;
 }
 
 /**
@@ -41,6 +43,13 @@ export const MultiProjectView = forwardRef<MultiProjectViewHandle, MultiProjectV
       if (activeTab) {
         const gridRef = gridRefs.current.get(activeTab.id);
         await gridRef?.launchAll();
+      }
+    },
+    closeFocusedSessionInActiveProject: () => {
+      const activeTab = tabs.find((t) => t.active);
+      if (activeTab) {
+        const gridRef = gridRefs.current.get(activeTab.id);
+        gridRef?.closeFocusedSession();
       }
     },
   }), [tabs]);

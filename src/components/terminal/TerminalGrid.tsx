@@ -122,6 +122,8 @@ function createEmptySlot(
 export interface TerminalGridHandle {
   addSession: () => void;
   launchAll: () => Promise<void>;
+  /** Kill the currently focused terminal session (if any). */
+  closeFocusedSession: () => void;
 }
 
 /**
@@ -848,7 +850,16 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     });
   }, [mcpServers, skills, plugins]);
 
-  useImperativeHandle(ref, () => ({ addSession, launchAll }), [addSession, launchAll]);
+  const closeFocusedSession = useCallback(() => {
+    if (!focusedSlotId) return;
+    const slot = slotsRef.current.find((s) => s.id === focusedSlotId);
+    if (slot?.sessionId !== null && slot?.sessionId !== undefined) {
+      killSession(slot.sessionId).catch(console.error);
+      handleKill(slot.sessionId);
+    }
+  }, [focusedSlotId, handleKill]);
+
+  useImperativeHandle(ref, () => ({ addSession, launchAll, closeFocusedSession }), [addSession, launchAll, closeFocusedSession]);
 
   if (error) {
     return (
