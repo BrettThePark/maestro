@@ -229,7 +229,7 @@ export type CliFlags = {
  * buildCliCommand("Codex", { skipPermissions: true, customFlags: "" })
  * // Returns: "codex --dangerously-bypass-approvals-and-sandbox"
  */
-export function buildCliCommand(mode: AiMode, flags?: CliFlags): string | null {
+export function buildCliCommand(mode: AiMode, flags?: CliFlags, systemPrompt?: string): string | null {
   const config = AI_CLI_CONFIG[mode];
   if (!config.command) return null;
 
@@ -242,6 +242,12 @@ export function buildCliCommand(mode: AiMode, flags?: CliFlags): string | null {
     if (flags.customFlags.trim()) {
       parts.push(flags.customFlags.trim());
     }
+  }
+
+  // Append system prompt for Maestro coordination (Claude-only)
+  if (systemPrompt && mode === "Claude") {
+    const escaped = systemPrompt.replace(/'/g, "'\\''");
+    parts.push(`--append-system-prompt $'${escaped.replace(/\n/g, "\\n")}'`);
   }
 
   return parts.join(" ");

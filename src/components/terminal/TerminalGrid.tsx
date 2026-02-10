@@ -14,6 +14,7 @@ import {
   type PluginConfig,
   type SkillConfig,
 } from "@/lib/plugins";
+import { MAESTRO_SYSTEM_PROMPT } from "@/lib/maestroPrompt";
 import {
   AI_CLI_CONFIG,
   assignSessionBranch,
@@ -592,7 +593,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
             // Build CLI command with user-configured flags
             const cliFlags = useCliSettingsStore.getState().getFlags(slot.mode);
-            const cliCommand = buildCliCommand(slot.mode, cliFlags);
+            const cliCommand = buildCliCommand(slot.mode, cliFlags, MAESTRO_SYSTEM_PROMPT);
 
             // Send CLI launch command
             await writeStdin(sessionId, `${cliCommand}\r`);
