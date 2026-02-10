@@ -144,8 +144,20 @@ function App() {
   }, []);
 
   const handleCloseSession = useCallback(() => {
-    multiProjectRef.current?.closeFocusedSessionInActiveProject();
-  }, []);
+    const { tabs: currentTabs, setSessionsLaunched: setLaunched } = useWorkspaceStore.getState();
+    const active = currentTabs.find((t) => t.active);
+    if (!active) return;
+
+    // If only one slot remains, return to idle view instead of leaving an empty grid
+    const counts = sessionCounts.get(active.id);
+    if (counts && counts.slotCount <= 1) {
+      // Kill the session, then go back to idle landing
+      multiProjectRef.current?.closeFocusedSessionInActiveProject();
+      setLaunched(active.id, false);
+    } else {
+      multiProjectRef.current?.closeFocusedSessionInActiveProject();
+    }
+  }, [sessionCounts]);
 
   useAppKeyboard({
     onNewSession: handleNewSession,
