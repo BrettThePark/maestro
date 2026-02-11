@@ -12,6 +12,8 @@ export interface MultiProjectViewHandle {
   launchAllInActiveProject: () => Promise<void>;
   /** Close/kill the focused terminal session in the active project. */
   closeFocusedSessionInActiveProject: () => void;
+  /** Re-focus the active terminal in the active project so it captures keystrokes. */
+  focusActiveSessionInActiveProject: () => void;
 }
 
 /**
@@ -50,6 +52,13 @@ export const MultiProjectView = forwardRef<MultiProjectViewHandle, MultiProjectV
       if (activeTab) {
         const gridRef = gridRefs.current.get(activeTab.id);
         gridRef?.closeFocusedSession();
+      }
+    },
+    focusActiveSessionInActiveProject: () => {
+      const activeTab = tabs.find((t) => t.active);
+      if (activeTab) {
+        const gridRef = gridRefs.current.get(activeTab.id);
+        gridRef?.focusActiveSession();
       }
     },
   }), [tabs]);

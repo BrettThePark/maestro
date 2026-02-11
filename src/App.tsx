@@ -115,13 +115,20 @@ function App() {
   const switchToNextTab = useCallback(() => {
     const idx = tabs.findIndex((t) => t.active);
     const next = tabs[(idx + 1) % tabs.length];
-    if (next) selectTab(next.id);
+    if (next) {
+      selectTab(next.id);
+      // Focus the active terminal after the tab becomes visible
+      requestAnimationFrame(() => multiProjectRef.current?.focusActiveSessionInActiveProject());
+    }
   }, [tabs, selectTab]);
 
   const switchToPrevTab = useCallback(() => {
     const idx = tabs.findIndex((t) => t.active);
     const prev = tabs[(idx - 1 + tabs.length) % tabs.length];
-    if (prev) selectTab(prev.id);
+    if (prev) {
+      selectTab(prev.id);
+      requestAnimationFrame(() => multiProjectRef.current?.focusActiveSessionInActiveProject());
+    }
   }, [tabs, selectTab]);
 
   useSwipeNavigation({

@@ -124,6 +124,8 @@ export interface TerminalGridHandle {
   launchAll: () => Promise<void>;
   /** Kill the currently focused terminal session (if any). */
   closeFocusedSession: () => void;
+  /** Re-focus the active terminal (or first launched) so it captures keystrokes. */
+  focusActiveSession: () => void;
 }
 
 /**
@@ -596,6 +598,9 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     await withProjectLock(lockPath, async () => {
       await launchSlotInner(slotId);
     });
+
+    // Auto-focus the newly launched session
+    setFocusedSlotId(slotId);
   }, [projectPath, launchSlotInner]);
 
   /**
@@ -844,6 +849,8 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
    */
   const addSession = useCallback(() => {
     if (slotsRef.current.length >= MAX_SESSIONS) return;
+    // Clear terminal focus so the new pre-launch card can capture keystrokes
+    setFocusedSlotId(null);
     setSlots((prev) => {
       if (prev.length >= MAX_SESSIONS) return prev;
       return [...prev, createEmptySlot(mcpServers, skills, plugins)];
@@ -851,15 +858,33 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   }, [mcpServers, skills, plugins]);
 
   const closeFocusedSession = useCallback(() => {
-    if (!focusedSlotId) return;
-    const slot = slotsRef.current.find((s) => s.id === focusedSlotId);
-    if (slot?.sessionId !== null && slot?.sessionId !== undefined) {
+    const launched = slotsRef.current.filter((s) => s.sessionId != null);
+    // Try focused slot first, fall back to the last launched session
+    const slot = focusedSlotId
+      ? launched.find((s) => s.id === focusedSlotId) ?? launched[launched.length - 1]
+      : launched[launched.length - 1];
+    if (slot?.sessionId != null) {
       killSession(slot.sessionId).catch(console.error);
       handleKill(slot.sessionId);
     }
   }, [focusedSlotId, handleKill]);
 
-  useImperativeHandle(ref, () => ({ addSession, launchAll, closeFocusedSession }), [addSession, launchAll, closeFocusedSession]);
+  /** Re-focus the active terminal session (or focus the first one if none focused). */
+  const focusActiveSession = useCallback(() => {
+    const launched = slotsRef.current.filter((s) => s.sessionId !== null);
+    if (launched.length === 0) return;
+
+    // Pick the currently focused slot, or fall back to the first launched slot
+    const target = focusedSlotId
+      ? launched.find((s) => s.id === focusedSlotId) ?? launched[0]
+      : launched[0];
+
+    // Toggle focusedSlotId to force TerminalView's isFocused useEffect to re-fire
+    setFocusedSlotId(null);
+    requestAnimationFrame(() => setFocusedSlotId(target.id));
+  }, [focusedSlotId]);
+
+  useImperativeHandle(ref, () => ({ addSession, launchAll, closeFocusedSession, focusActiveSession }), [addSession, launchAll, closeFocusedSession, focusActiveSession]);
 
   if (error) {
     return (

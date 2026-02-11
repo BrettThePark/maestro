@@ -167,6 +167,14 @@ export function PreLaunchCard({
   const modeConfig = getModeConfig(slot.mode);
   const ModeIcon = modeConfig.icon;
 
+  // Auto-focus the launch button on mount so Enter triggers it
+  const launchButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    // Brief delay to let the card render before stealing focus
+    const timer = setTimeout(() => launchButtonRef.current?.focus(), 50);
+    return () => clearTimeout(timer);
+  }, []);
+
   // Close dropdowns on outside click
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -1091,6 +1099,7 @@ export function PreLaunchCard({
 
         {/* Launch Button */}
         <button
+          ref={launchButtonRef}
           type="button"
           onClick={onLaunch}
           className="flex items-center justify-center gap-2 rounded bg-maestro-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-maestro-accent/80"
