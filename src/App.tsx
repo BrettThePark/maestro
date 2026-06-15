@@ -13,6 +13,7 @@ import { useGitStore } from "./stores/useGitStore";
 import { useTerminalSettingsStore } from "./stores/useTerminalSettingsStore";
 import { useAppKeyboard } from "./hooks/useAppKeyboard";
 import { useSwipeNavigation } from "./hooks/useSwipeNavigation";
+import { useDockBadge } from "./hooks/useDockBadge";
 import { useUpdateStore } from "./stores/useUpdateStore";
 import { initActivityListener, stopActivityListener } from "./stores/useActivityStore";
 import { UpdateNotification } from "./components/update/UpdateNotification";
@@ -208,6 +209,9 @@ function App() {
     onSwipeRight: switchToPrevTab,
     enabled: tabs.length >= 2,
   });
+
+  // macOS dock badge: number of sessions awaiting user input
+  useDockBadge();
 
   // Git store for commit count and refresh
   const { commits, fetchCommits } = useGitStore();
