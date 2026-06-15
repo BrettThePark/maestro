@@ -302,6 +302,8 @@ function App() {
   useAppKeyboard({
     onAddSession: handleAddSessionShortcut,
     canAddSession: activeTabSessionsLaunched,
+    onNextTab: switchToNextTab,
+    onPrevTab: switchToPrevTab,
   });
 
   // Handler to enter grid view for the active project

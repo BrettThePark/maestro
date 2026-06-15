@@ -301,6 +301,20 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     enabled: isActive,
   });
 
+  // When this project tab becomes active, re-assert terminal focus so it
+  // captures keystrokes without requiring a click (e.g. after Cmd+{ / Cmd+}).
+  // TerminalView only grabs DOM focus on an isFocused false->true transition,
+  // so we briefly clear the focused slot to retrigger it.
+  useEffect(() => {
+    if (!isActive) return;
+    const target = focusedSlotId ?? launchedSlots[0]?.id;
+    if (!target) return;
+    setFocusedSlotId(null);
+    const raf = requestAnimationFrame(() => setFocusedSlotId(target));
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run only when the active-tab flag flips
+  }, [isActive]);
+
   // Drag-and-drop files from Finder/Explorer onto terminal panes
   const { dropTargetSlotId, isDraggingFiles } = useTerminalDragDrop({
     slots,
