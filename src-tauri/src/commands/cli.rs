@@ -366,6 +366,6 @@ mod tests {
     #[test]
     fn cli_script_embedded_and_nonempty() {
         assert!(CLI_SCRIPT.starts_with("#!/bin/bash"));
-        assert!(CLI_SCRIPT.contains("com.maestro.app"));
+        assert!(CLI_SCRIPT.contains("com.maestro.appb"));
     }
 }

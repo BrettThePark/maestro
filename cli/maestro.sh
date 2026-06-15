@@ -17,14 +17,14 @@ resolve_path() {
 
 launch_macos() {
     # Try bundle identifier first (most reliable)
-    if open -b com.maestro.app "$@" 2>/dev/null; then
+    if open -b com.maestro.appb "$@" 2>/dev/null; then
         return 0
     fi
     # Fall back to app name
-    if open -a Maestro "$@" 2>/dev/null; then
+    if open -a MaestroB "$@" 2>/dev/null; then
         return 0
     fi
-    echo "Error: Maestro.app not found. Is it installed?" >&2
+    echo "Error: MaestroB.app not found. Is it installed?" >&2
     return 1
 }
 
