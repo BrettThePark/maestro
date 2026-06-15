@@ -178,6 +178,7 @@ export const TerminalView = memo(function TerminalView({
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const safeFitRef = useRef<(() => void) | null>(null);
 
   // Quick actions manager modal state
   const [showQuickActionsManager, setShowQuickActionsManager] = useState(false);
@@ -236,7 +237,7 @@ export const TerminalView = memo(function TerminalView({
       // Refit terminal to recalculate cell dimensions
       requestAnimationFrame(() => {
         try {
-          fitAddonRef.current?.fit();
+          safeFitRef.current?.();
         } catch {
           // Ignore fit errors during transition
         }
@@ -381,10 +382,19 @@ export const TerminalView = memo(function TerminalView({
       try {
         const webglAddon = new WebglAddon();
         webglAddon.onContextLoss(() => {
+          // Preserve scroll position across the renderer swap
+          const buf = term!.buffer.active;
+          const wasAtBottom = buf.viewportY >= buf.baseY;
+          const savedLine = buf.viewportY;
           webglAddon.dispose();
           try {
             term?.loadAddon(new CanvasAddon());
           } catch { /* DOM renderer as final fallback */ }
+          requestAnimationFrame(() => {
+            if (disposed || !term) return;
+            if (wasAtBottom) term.scrollToBottom();
+            else term.scrollToLine(savedLine);
+          });
         });
         term.loadAddon(webglAddon);
       } catch {
@@ -394,15 +404,30 @@ export const TerminalView = memo(function TerminalView({
         } catch { /* DOM renderer as final fallback */ }
       }
 
+      // Wrap fitAddon.fit() so the viewport scroll position is preserved.
+      // xterm.js otherwise jumps to the top of the buffer when fit() clears
+      // its render state during resizes and tab switches.
+      const safeFit = () => {
+        if (!term || !fitAddon) return;
+        try {
+          const buf = term.buffer.active;
+          const wasAtBottom = buf.viewportY >= buf.baseY;
+          const savedLine = buf.viewportY;
+          fitAddon.fit();
+          if (wasAtBottom) {
+            term.scrollToBottom();
+          } else {
+            term.scrollToLine(savedLine);
+          }
+        } catch { /* ignore during layout transitions */ }
+      };
+
       termRef.current = term;
       fitAddonRef.current = fitAddon;
+      safeFitRef.current = safeFit;
 
       requestAnimationFrame(() => {
-        try {
-          fitAddon?.fit();
-        } catch {
-          // Container may not be sized yet
-        }
+        safeFit();
       });
 
       // Workaround for xterm.js CompositionHelper bug on WebKit (Tauri/WKWebView):
@@ -637,12 +662,8 @@ export const TerminalView = memo(function TerminalView({
 
       resizeObserver = new ResizeObserver(() => {
         requestAnimationFrame(() => {
-          if (!disposed && fitAddon) {
-            try {
-              fitAddon.fit();
-            } catch {
-              // Container may have zero dimensions during layout transitions
-            }
+          if (!disposed) {
+            safeFit();
           }
         });
       });
@@ -674,6 +695,7 @@ export const TerminalView = memo(function TerminalView({
       term?.dispose();
       termRef.current = null;
       fitAddonRef.current = null;
+      safeFitRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Font settings are read once at init, dynamic updates via separate effect
   }, [sessionId]);
