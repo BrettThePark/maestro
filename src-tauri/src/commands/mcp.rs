@@ -10,7 +10,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
 
 use crate::core::mcp_config_writer;
-use crate::core::mcp_manager::{McpManager, McpServerConfig};
+use crate::core::mcp_manager::{McpManager, McpServerConfig, McpServerSource};
 use crate::core::status_server::StatusServer;
 
 /// Store filename for custom MCP servers (global, user-level).
@@ -297,11 +297,16 @@ pub async fn write_session_mcp_config(
     let status_url = status_server.status_url();
     let instance_id = status_server.instance_id();
 
-    // Get full server configs for enabled discovered servers
+    // Get full server configs for enabled discovered servers.
+    // Only ever materialize genuinely project-scoped servers: user/local-scope
+    // servers are read by Claude/OpenCode natively from ~/.claude.json, so writing
+    // them into the project config would shadow that source and freeze a stale token
+    // (see MCP_TOKEN_BUGFIX.md).
     let all_discovered = mcp_state.get_project_servers(&canonical);
     let enabled_discovered: Vec<_> = all_discovered
         .into_iter()
         .filter(|s| enabled_server_names.contains(&s.name))
+        .filter(|s| s.source == McpServerSource::Project)
         .collect();
 
     // Get enabled custom servers
@@ -361,11 +366,16 @@ pub async fn write_opencode_mcp_config(
     let status_url = status_server.status_url();
     let instance_id = status_server.instance_id();
 
-    // Get full server configs for enabled discovered servers
+    // Get full server configs for enabled discovered servers.
+    // Only ever materialize genuinely project-scoped servers: user/local-scope
+    // servers are read by Claude/OpenCode natively from ~/.claude.json, so writing
+    // them into the project config would shadow that source and freeze a stale token
+    // (see MCP_TOKEN_BUGFIX.md).
     let all_discovered = mcp_state.get_project_servers(&canonical);
     let enabled_discovered: Vec<_> = all_discovered
         .into_iter()
         .filter(|s| enabled_server_names.contains(&s.name))
+        .filter(|s| s.source == McpServerSource::Project)
         .collect();
 
     // Get enabled custom servers

@@ -344,8 +344,14 @@ pub async fn write_session_mcp_config(
         );
     }
 
-    // Add enabled discovered servers from project .mcp.json
+    // Add enabled discovered servers — but ONLY genuinely project-scoped ones.
+    // User/local-scope servers are read by Claude Code natively from ~/.claude.json;
+    // materializing them here as project-scope entries would shadow that source and
+    // freeze a stale token forever (see MCP_TOKEN_BUGFIX.md).
     for server in enabled_servers {
+        if matches!(server.source, McpServerSource::User | McpServerSource::Local) {
+            continue;
+        }
         mcp_servers.insert(server.name.clone(), server_config_to_json(server));
     }
 
@@ -684,6 +690,72 @@ mod tests {
         let json = server_config_to_json(&config);
         assert_eq!(json["type"], "http");
         assert_eq!(json["url"], "http://localhost:3000");
+    }
+
+    #[tokio::test]
+    async fn test_write_session_mcp_config_drops_user_and_local_scope() {
+        // Regression for the stale-token bug: user/local-scope servers (read by
+        // Claude natively from ~/.claude.json) must never be materialized into the
+        // project .mcp.json, or they shadow their source and freeze a stale token.
+        let dir = tempdir().unwrap();
+
+        let enabled = vec![
+            McpServerConfig {
+                name: "proj-keep".to_string(),
+                server_type: McpServerType::Stdio {
+                    command: "/bin/proj".to_string(),
+                    args: vec![],
+                    env: HashMap::new(),
+                },
+                source: McpServerSource::Project,
+            },
+            McpServerConfig {
+                name: "user-leak".to_string(),
+                server_type: McpServerType::Stdio {
+                    command: "/bin/user".to_string(),
+                    args: vec![],
+                    env: HashMap::new(),
+                },
+                source: McpServerSource::User,
+            },
+            McpServerConfig {
+                name: "local-leak".to_string(),
+                server_type: McpServerType::Stdio {
+                    command: "/bin/local".to_string(),
+                    args: vec![],
+                    env: HashMap::new(),
+                },
+                source: McpServerSource::Local,
+            },
+        ];
+
+        write_session_mcp_config(
+            dir.path(),
+            1,
+            "http://127.0.0.1:9900/status",
+            "test-instance",
+            &enabled,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let servers = parsed["mcpServers"].as_object().unwrap();
+
+        assert!(
+            servers.contains_key("proj-keep"),
+            "project-scoped server must be written"
+        );
+        assert!(
+            !servers.contains_key("user-leak"),
+            "user-scope server must NOT be materialized into project .mcp.json"
+        );
+        assert!(
+            !servers.contains_key("local-leak"),
+            "local-scope server must NOT be materialized into project .mcp.json"
+        );
     }
 
     #[tokio::test]

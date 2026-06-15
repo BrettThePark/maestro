@@ -11,6 +11,7 @@ use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::SystemTime;
 
 /// The source/origin of an MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -84,12 +85,20 @@ struct McpServerEntry {
 /// Session-specific key for enabled servers lookup.
 type SessionKey = (String, u32); // (project_path, session_id)
 
+/// Cached discovery result for a project, tagged with the `.mcp.json` mtime at
+/// cache time so a changed or deleted file triggers re-discovery.
+struct CachedServers {
+    /// mtime of `.mcp.json` when cached; `None` means the file was absent.
+    mtime: Option<SystemTime>,
+    servers: Vec<McpServerConfig>,
+}
+
 /// Manages MCP server discovery and per-session enabled state.
 ///
 /// Thread-safe via `DashMap` — can be accessed from multiple async tasks.
 pub struct McpManager {
-    /// Cached MCP servers per project path (canonicalized).
-    project_servers: DashMap<String, Vec<McpServerConfig>>,
+    /// Cached MCP servers per project path (canonicalized), invalidated on mtime change.
+    project_servers: DashMap<String, CachedServers>,
     /// Enabled server names per (project_path, session_id).
     session_enabled: DashMap<SessionKey, Vec<String>>,
 }
@@ -128,6 +137,14 @@ fn parse_mcp_entries(
             })
         })
         .collect()
+}
+
+/// Returns the modified-time of `<project_path>/.mcp.json`, or `None` if the file
+/// is absent or its mtime can't be read.
+fn mcp_mtime(project_path: &str) -> Option<SystemTime> {
+    std::fs::metadata(Path::new(project_path).join(".mcp.json"))
+        .and_then(|m| m.modified())
+        .ok()
 }
 
 impl McpManager {
@@ -250,23 +267,40 @@ impl McpManager {
     ///
     /// The project_path should be canonicalized for consistent caching.
     pub fn get_project_servers(&self, project_path: &str) -> Vec<McpServerConfig> {
-        // Return cached if available
-        if let Some(servers) = self.project_servers.get(project_path) {
-            return servers.clone();
+        let current = mcp_mtime(project_path);
+
+        // Return the cached result only if .mcp.json is unchanged since caching.
+        // (The read guard is dropped at the end of this block, before we insert,
+        // to avoid a DashMap self-deadlock on the same shard.)
+        if let Some(cached) = self.project_servers.get(project_path) {
+            if cached.mtime == current {
+                return cached.servers.clone();
+            }
         }
 
-        // Discover from all sources and cache
+        // File is new, changed, or gone — re-discover and refresh the cache.
         let servers = Self::discover_all_servers(project_path);
-        self.project_servers
-            .insert(project_path.to_string(), servers.clone());
+        self.project_servers.insert(
+            project_path.to_string(),
+            CachedServers {
+                mtime: current,
+                servers: servers.clone(),
+            },
+        );
         servers
     }
 
     /// Refreshes the cached servers for a project by re-discovering from all sources.
     pub fn refresh_project_servers(&self, project_path: &str) -> Vec<McpServerConfig> {
+        let current = mcp_mtime(project_path);
         let servers = Self::discover_all_servers(project_path);
-        self.project_servers
-            .insert(project_path.to_string(), servers.clone());
+        self.project_servers.insert(
+            project_path.to_string(),
+            CachedServers {
+                mtime: current,
+                servers: servers.clone(),
+            },
+        );
         servers
     }
 
@@ -367,12 +401,16 @@ impl Default for McpManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_parse_empty_project() {
         let manager = McpManager::new();
+        // A nonexistent path has no project-scoped servers. (User-scope servers
+        // from a real ~/.claude.json may still be discovered in dev environments,
+        // so assert specifically on project scope rather than total emptiness.)
         let servers = manager.get_project_servers("/nonexistent/path");
-        assert!(servers.is_empty());
+        assert!(servers.iter().all(|s| s.source != McpServerSource::Project));
     }
 
     #[test]
@@ -393,5 +431,71 @@ mod tests {
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].name, "test-server");
         assert_eq!(servers[0].source, McpServerSource::Project);
+    }
+
+    #[test]
+    fn test_get_project_servers_reflects_file_change() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().to_str().unwrap().to_string();
+        let mcp_path = dir.path().join(".mcp.json");
+
+        std::fs::write(
+            &mcp_path,
+            r#"{"mcpServers":{"alpha":{"type":"stdio","command":"/bin/alpha"}}}"#,
+        )
+        .unwrap();
+
+        let manager = McpManager::new();
+        let first = manager.get_project_servers(&project_path);
+        assert!(
+            first.iter().any(|s| s.name == "alpha"),
+            "alpha should be discovered on first read"
+        );
+
+        // Add a second server and push mtime forward so the change is detectable
+        std::fs::write(
+            &mcp_path,
+            r#"{"mcpServers":{"alpha":{"type":"stdio","command":"/bin/alpha"},"beta":{"type":"stdio","command":"/bin/beta"}}}"#,
+        )
+        .unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&mcp_path).unwrap();
+        f.set_modified(SystemTime::now() + Duration::from_secs(5)).unwrap();
+        drop(f);
+
+        let second = manager.get_project_servers(&project_path);
+        assert!(
+            second.iter().any(|s| s.name == "beta"),
+            "beta should appear after the file changes (cache must invalidate on mtime change)"
+        );
+    }
+
+    #[test]
+    fn test_get_project_servers_invalidated_on_delete() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path().to_str().unwrap().to_string();
+        let mcp_path = dir.path().join(".mcp.json");
+
+        std::fs::write(
+            &mcp_path,
+            r#"{"mcpServers":{"gamma-unique":{"type":"stdio","command":"/bin/gamma"}}}"#,
+        )
+        .unwrap();
+
+        let manager = McpManager::new();
+        let first = manager.get_project_servers(&project_path);
+        assert!(
+            first.iter().any(|s| s.name == "gamma-unique"),
+            "gamma-unique should be discovered while the file exists"
+        );
+
+        std::fs::remove_file(&mcp_path).unwrap();
+
+        let after = manager.get_project_servers(&project_path);
+        assert!(
+            !after.iter().any(|s| s.name == "gamma-unique"),
+            "a project server must not survive deletion of .mcp.json (stale cache)"
+        );
     }
 }
