@@ -4,9 +4,51 @@
 //! Claude Code to POST hook events (SessionStart, SessionEnd, PreToolUse, Stop)
 //! back to Maestro's HTTP status server via curl commands.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock};
 
+use dashmap::DashMap;
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
+
+/// Per-directory lock serializing concurrent settings.local.json read-modify-write ops.
+static DIR_LOCKS: LazyLock<DashMap<PathBuf, Arc<Mutex<()>>>> = LazyLock::new(DashMap::new);
+
+/// Acquire a per-directory lock for atomic settings.local.json operations.
+fn dir_lock(dir: &Path) -> Arc<Mutex<()>> {
+    DIR_LOCKS
+        .entry(dir.to_path_buf())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .value()
+        .clone()
+}
+
+/// Write content to a file atomically: write a temp file in the same directory, then rename.
+///
+/// Claude Code also writes `.claude/settings.local.json` (enabledPlugins,
+/// enabledMcpjsonServers). A plain in-place write can interleave with that and
+/// leave torn/invalid JSON; an atomic rename guarantees a reader always sees a
+/// complete file — never a partial mix.
+async fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
+    let parent = path.parent().ok_or("No parent directory")?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("settings.local.json");
+    let temp_path = parent.join(format!(".{}.tmp.{}", file_name, std::process::id()));
+
+    tokio::fs::write(&temp_path, content)
+        .await
+        .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+    tokio::fs::rename(&temp_path, path).await.map_err(|e| {
+        // Clean up temp file on rename failure
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Failed to rename temp file: {}", e)
+    })?;
+
+    Ok(())
+}
 
 /// Builds the hooks configuration JSON for a session.
 ///
@@ -79,6 +121,12 @@ pub async fn write_session_hooks_config(
             .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
     }
 
+    // Serialize concurrent writes to this directory's settings file and write
+    // atomically (temp + rename), so a racing writer (e.g. Claude Code rewriting
+    // enabledPlugins) can never leave torn/invalid JSON.
+    let lock = dir_lock(&claude_dir);
+    let _guard = lock.lock().await;
+
     // Read existing settings or start fresh
     let settings_path = claude_dir.join("settings.local.json");
     let mut config: Value = if settings_path.exists() {
@@ -100,9 +148,7 @@ pub async fn write_session_hooks_config(
     let content = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize hooks config: {}", e))?;
 
-    tokio::fs::write(&settings_path, content)
-        .await
-        .map_err(|e| format!("Failed to write settings.local.json: {}", e))?;
+    atomic_write(&settings_path, &content).await?;
 
     log::debug!(
         "Wrote session {} hooks config to {:?} (port={}, instance={})",
@@ -129,6 +175,11 @@ pub async fn remove_session_hooks_config(working_dir: &Path) -> Result<(), Strin
         return Ok(());
     }
 
+    // Same per-directory lock + atomic write as the writer, so removal can't
+    // race a concurrent write into a torn file.
+    let lock = dir_lock(&working_dir.join(".claude"));
+    let _guard = lock.lock().await;
+
     let content = tokio::fs::read_to_string(&settings_path)
         .await
         .map_err(|e| format!("Failed to read settings.local.json: {}", e))?;
@@ -147,9 +198,7 @@ pub async fn remove_session_hooks_config(working_dir: &Path) -> Result<(), Strin
     let output = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-    tokio::fs::write(&settings_path, output)
-        .await
-        .map_err(|e| format!("Failed to write settings.local.json: {}", e))?;
+    atomic_write(&settings_path, &output).await?;
 
     Ok(())
 }
@@ -326,5 +375,71 @@ mod tests {
         // No .claude directory or settings file exists
         let result = remove_session_hooks_config(dir.path()).await;
         assert!(result.is_ok(), "remove should be a no-op for missing file");
+    }
+
+    #[tokio::test]
+    async fn test_atomic_write_produces_valid_json_and_no_temp_left() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("settings.local.json");
+
+        let content = serde_json::to_string_pretty(&json!({
+            "enabledPlugins": { "x": true },
+            "hooks": { "Stop": [] }
+        }))
+        .unwrap();
+
+        atomic_write(&path, &content).await.unwrap();
+
+        // File is complete + valid
+        let read_back = std::fs::read_to_string(&path).unwrap();
+        let parsed: Value = serde_json::from_str(&read_back).unwrap();
+        assert_eq!(parsed["enabledPlugins"]["x"], json!(true));
+
+        // No temp artifact should remain in the directory
+        let temp_left = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains(".tmp."));
+        assert!(!temp_left, "atomic_write must not leave a temp file behind");
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_hook_writes_produce_valid_json() {
+        // Regression: a shorter concurrent writer (e.g. Claude Code rewriting
+        // enabledPlugins) racing Maestro's longer hook write must never leave
+        // settings.local.json as invalid JSON (the reported corruption).
+        let dir = tempdir().unwrap();
+        let claude = dir.path().join(".claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        let path = claude.join("settings.local.json");
+
+        for round in 0..60u32 {
+            std::fs::write(&path, br#"{"enabledPlugins":{"a":true}}"#).unwrap();
+
+            let d = dir.path().to_path_buf();
+            let maestro = tokio::spawn(async move {
+                // Maestro's (longer) hook write
+                let _ = write_session_hooks_config(&d, round, 9900, "instance-xyz-abc-1234").await;
+            });
+            let p = path.clone();
+            let claude_code = tokio::spawn(async move {
+                // Claude Code's (shorter) rewrite of the same file
+                let _ = tokio::fs::write(
+                    &p,
+                    br#"{"enabledPlugins":{"a":true},"enabledMcpjsonServers":["x"]}"#,
+                )
+                .await;
+            });
+            let _ = maestro.await;
+            let _ = claude_code.await;
+
+            let content = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                serde_json::from_str::<Value>(&content).is_ok(),
+                "round {}: settings.local.json must remain valid JSON, got:\n{}",
+                round,
+                content
+            );
+        }
     }
 }
