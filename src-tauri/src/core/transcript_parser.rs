@@ -42,13 +42,16 @@ pub fn parse_transcript_line(session_id: u32, line: &str) -> Vec<ClaudeEvent> {
 // ---------------------------------------------------------------------------
 
 /// Truncate a string to `max` characters, appending "..." if truncated.
+///
+/// Counts and cuts by *characters*, never bytes. `&s[..n]` panics when the byte
+/// index lands mid-codepoint, and because the release profile sets
+/// `panic = "abort"` that took the entire app down from the transcript-reader
+/// task — a single em-dash at byte 120 of a Bash command was enough to make a
+/// session permanently unopenable. Mirrors `claude_sessions::truncate_chars`.
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        let mut result = s[..max].to_string();
-        result.push_str("...");
-        result
+    match s.char_indices().nth(max) {
+        None => s.to_string(),
+        Some((boundary, _)) => format!("{}...", &s[..boundary]),
     }
 }
 
@@ -476,5 +479,41 @@ mod tests {
         let summary = summarize_tool_input("Bash", &input);
         assert!(summary.ends_with("..."));
         assert_eq!(summary.len(), 123); // 120 + "..."
+    }
+
+    #[test]
+    fn test_truncate_does_not_split_multibyte_characters() {
+        // Regression: `&s[..n]` slices by *bytes*, so a cut landing mid-codepoint
+        // panicked at runtime. With `panic = "abort"` in the release profile that
+        // aborted the whole app, on a tokio worker, whenever a transcript was read.
+        //
+        // Shaped like the real crash: a Bash command whose byte 120 falls inside
+        // an em-dash. The assertion below pins that property so the fixture
+        // can't drift into testing nothing.
+        let cmd = "cd /Users/dev/project\ncat >> reports/inventory.md <<'EOF'\n\n---\n\n# Valuation report for the March 2026 inventory sweep \u{2014} asking price";
+        assert!(!cmd.is_char_boundary(120), "fixture must cut mid-codepoint at byte 120");
+        let input = serde_json::json!({ "command": cmd });
+        let summary = summarize_tool_input("Bash", &input);
+        assert!(summary.ends_with("..."));
+        // Cut on a character boundary: 120 chars of input plus the ellipsis.
+        assert_eq!(summary.chars().count(), 123);
+
+        // The same hazard on the Task and catch-all branches. 100 em-dashes is
+        // 300 bytes but only 100 chars, so this exercises the char-based limit.
+        let desc = "\u{2014}".repeat(100);
+        assert_eq!(
+            summarize_tool_input("Task", &serde_json::json!({ "description": desc }))
+                .chars()
+                .count(),
+            83
+        );
+        let catch_all = summarize_tool_input(
+            "SomeOtherTool",
+            &serde_json::json!({ "note": "\u{2014}".repeat(200) }),
+        );
+        assert_eq!(catch_all.chars().count(), 103);
+
+        // A cut exactly on a boundary must not gain a stray character.
+        assert_eq!(truncate("\u{2014}\u{2014}", 2), "\u{2014}\u{2014}");
     }
 }
