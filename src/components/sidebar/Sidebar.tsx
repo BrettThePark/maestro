@@ -43,7 +43,7 @@ import { useMarketplaceStore } from "@/stores/useMarketplaceStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 import { useProcessTreeStore, type ProcessInfo, type SessionProcessTree } from "@/stores/useProcessTreeStore";
 import { useUsageStore } from "@/stores/useUsageStore";
-import { GitSettingsModal, RemoteStatusIndicator } from "@/components/git";
+import { GitSettingsModal } from "@/components/git";
 import { QuickActionsManager } from "@/components/quickactions/QuickActionsManager";
 import { MarketplaceBrowser } from "@/components/marketplace";
 import { McpServerEditorModal } from "@/components/mcp";
@@ -297,7 +297,7 @@ function ConfigTab({
   onToggleTheme?: () => void;
 }) {
   return (
-    <>
+    <div className="flex flex-col gap-0 w-full min-w-0 max-w-full overflow-hidden">
       <GitRepositorySection />
       {divider}
       <ProjectContextSection />
@@ -315,7 +315,7 @@ function ConfigTab({
       <QuickActionsSection />
       {divider}
       <AppearanceSection theme={theme} onToggle={onToggleTheme} />
-    </>
+    </div>
   );
 }
 
@@ -336,8 +336,9 @@ function GitRepositorySection() {
   const repoPath = activeTab?.projectPath ?? "";
   const worktreeBasePath = activeTab?.worktreeBasePath ?? null;
 
-  const { userConfig, remotes, remoteStatuses, fetchUserConfig, fetchRemotes, testAllRemotes } =
-    useGitStore();
+  // `remotes` is still needed to decide whether to show the settings hint, but
+  // the sidebar no longer renders per-remote status, so it doesn't probe them.
+  const { userConfig, remotes, fetchUserConfig, fetchRemotes } = useGitStore();
 
   // Fetch default worktree base dir on mount
   useEffect(() => {
@@ -351,36 +352,9 @@ function GitRepositorySection() {
     fetchRemotes(repoPath);
   }, [repoPath, fetchUserConfig, fetchRemotes]);
 
-  // Test remotes after fetching them
-  useEffect(() => {
-    if (!repoPath || remotes.length === 0) return;
-    // Only test if we don't have statuses yet
-    const hasStatuses = remotes.some((r) => remoteStatuses[r.name] !== undefined);
-    if (!hasStatuses) {
-      testAllRemotes(repoPath);
-    }
-  }, [repoPath, remotes, remoteStatuses, testAllRemotes]);
-
   const hasUser = userConfig?.name || userConfig?.email;
   const displayName = userConfig?.name || "Not configured";
   const displayEmail = userConfig?.email || "No email set";
-
-  // Format remote URL for display (shorten GitHub URLs)
-  const formatRemoteUrl = (url: string) => {
-    // git@github.com:user/repo.git -> github.com/user/repo
-    // https://github.com/user/repo.git -> github.com/user/repo
-    const match = url.match(/github\.com[:/](.+?)(?:\.git)?$/);
-    if (match) {
-      return `github.com/${match[1]}`;
-    }
-    // For other URLs, just show the host/path
-    try {
-      const parsed = new URL(url.replace(/^git@/, "https://").replace(/:(?!\/\/)/, "/"));
-      return `${parsed.host}${parsed.pathname.replace(/\.git$/, "")}`;
-    } catch {
-      return url;
-    }
-  };
 
   if (!repoPath) {
     return (
@@ -397,7 +371,7 @@ function GitRepositorySection() {
 
   return (
     <>
-      <div className={cardClass}>
+      <div className={`${cardClass} min-w-0`}>
         <SectionHeader
           icon={GitBranch}
           label="Git Repository"
@@ -420,23 +394,11 @@ function GitRepositorySection() {
         </div>
         <div className="pl-5 text-[11px] text-maestro-muted truncate">{displayEmail}</div>
 
-        {/* Remotes */}
-        {remotes.length === 0 ? (
-          <div className="mt-2 px-1 py-1 text-xs text-maestro-muted">No remotes configured</div>
-        ) : (
-          remotes.map((remote) => (
-            <div key={remote.name} className="mt-1">
-              <div className="flex items-center gap-2 px-1 py-1">
-                <RemoteStatusIndicator status={remoteStatuses[remote.name] ?? "unknown"} />
-                <span className="text-xs font-semibold text-maestro-text truncate">
-                  {remote.name}
-                </span>
-              </div>
-              <div className="pl-5 text-[11px] text-maestro-muted truncate">
-                {formatRemoteUrl(remote.url)}
-              </div>
-            </div>
-          ))
+        {/* Remotes hint */}
+        {remotes.length > 0 && (
+          <div className="mt-2 px-1 text-[10px] text-maestro-muted/60 italic">
+            View remotes in settings
+          </div>
         )}
 
         {/* Worktree base path */}
