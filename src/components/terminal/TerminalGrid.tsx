@@ -38,6 +38,8 @@ import { useTerminalKeyboard } from "@/hooks/useTerminalKeyboard";
 import { useMcpStore } from "@/stores/useMcpStore";
 import { useWorktreeSettingsStore } from "@/stores/useWorktreeSettingsStore";
 import { usePluginStore } from "@/stores/usePluginStore";
+import { useReviewStore } from "@/stores/useReviewStore";
+import { useWindowFocus } from "@/hooks/useWindowFocus";
 import { useSessionStore } from "@/stores/useSessionStore";
 import type { AiMode } from "@/stores/useSessionStore";
 import { useWorkspaceStore, type RepositoryInfo, type WorkspaceType } from "@/stores/useWorkspaceStore";
@@ -276,7 +278,14 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   const getFocusCallback = useCallback((slotId: string) => {
     let cb = focusCallbacksRef.current.get(slotId);
     if (!cb) {
-      cb = () => setFocusedSlotId(slotId);
+      cb = () => {
+        setFocusedSlotId(slotId);
+        // Fires on every click on the pane — including one on the pane that is already
+        // focused, which the focus effect above cannot see. That click is the user
+        // touching a session they were merely sitting on, so it clears its badge.
+        const sessionId = slotsRef.current.find((s) => s.id === slotId)?.sessionId;
+        if (sessionId != null) useReviewStore.getState().markReviewed(sessionId);
+      };
       focusCallbacksRef.current.set(slotId, cb);
     }
     return cb;
@@ -299,6 +308,20 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     const idx = launchedSlots.findIndex((s) => s.id === focusedSlotId);
     return idx >= 0 ? idx : null;
   }, [focusedSlotId, launchedSlots]);
+
+  // Moving focus onto a pane counts as reviewing that session, so it stops contributing
+  // to the dock badge. Gated on the tab being the visible one and the window actually
+  // holding OS focus — otherwise focus restored while the user is in another app would
+  // clear a badge they never saw. Deliberately NOT dependent on the unreviewed set: a
+  // session that finishes under an already-focused pane must keep counting until the
+  // user actually touches it (see getFocusCallback for clicks, TerminalView for typing).
+  const windowFocused = useWindowFocus();
+  const markSessionReviewed = useReviewStore((s) => s.markReviewed);
+  useEffect(() => {
+    if (!isActive || !windowFocused || !focusedSlotId) return;
+    const sessionId = slotsRef.current.find((s) => s.id === focusedSlotId)?.sessionId;
+    if (sessionId != null) markSessionReviewed(sessionId);
+  }, [isActive, windowFocused, focusedSlotId, markSessionReviewed]);
 
   // Ref-based close callback to avoid forward-reference issues with handleKill/removeSlot
   const closePaneRef = useRef<() => void>(() => {});

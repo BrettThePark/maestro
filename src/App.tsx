@@ -16,6 +16,7 @@ import { useSwipeNavigation } from "./hooks/useSwipeNavigation";
 import { useDockBadge } from "./hooks/useDockBadge";
 import { useUpdateStore } from "./stores/useUpdateStore";
 import { initActivityListener, stopActivityListener } from "./stores/useActivityStore";
+import { initReviewTracking } from "./stores/useReviewStore";
 import { UpdateNotification } from "./components/update/UpdateNotification";
 import { GitGraphPanel } from "./components/git/GitGraphPanel";
 import { BottomBar } from "./components/shared/BottomBar";
@@ -141,6 +142,9 @@ function App() {
     };
   }, []);
 
+  // Track which finished sessions haven't been reviewed yet (drives the dock badge)
+  useEffect(() => initReviewTracking(), []);
+
   // Listen for CLI-initiated project open events (from `maestro /path`).
   //
   // Two triggers:
@@ -210,7 +214,7 @@ function App() {
     enabled: tabs.length >= 2,
   });
 
-  // macOS dock badge: number of sessions awaiting user input
+  // macOS dock badge: sessions awaiting input, plus finished-but-unreviewed sessions
   useDockBadge();
 
   // Git store for commit count and refresh

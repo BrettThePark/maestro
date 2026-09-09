@@ -17,6 +17,7 @@ import { buildFontFamily, waitForFont } from "@/lib/fonts";
 import { getBackendInfo, killSession, onPtyOutput, resizePty, savePastedImage, signalTerminalReady, writeStdin, type BackendInfo } from "@/lib/terminal";
 import { DEFAULT_THEME, LIGHT_THEME, toXtermTheme } from "@/lib/terminalTheme";
 import { useMcpStore } from "@/stores/useMcpStore";
+import { useReviewStore } from "@/stores/useReviewStore";
 import { type AiMode, type BackendSessionStatus, useSessionStore } from "@/stores/useSessionStore";
 import { useTerminalSettingsStore } from "@/stores/useTerminalSettingsStore";
 import { useShallow } from "zustand/react/shallow";
@@ -512,6 +513,10 @@ export const TerminalView = memo(function TerminalView({
       });
 
       dataDisposable = term.onData((data) => {
+        // Real keystrokes and pastes only (never programmatic term.write), so this is
+        // the honest "user is working in this session" signal that clears its badge.
+        useReviewStore.getState().markReviewed(sessionId);
+
         if (pendingCompositionData !== null) {
           const correctData = pendingCompositionData;
           pendingCompositionData = null;
