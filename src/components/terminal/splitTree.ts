@@ -265,3 +265,109 @@ export function findPath(tree: TreeNode, slotId: string): PathStep[] | null {
   }
   return null;
 }
+
+/** No pane other than the soft-zoomed one may fall below this share of an axis. */
+export const SOFT_ZOOM_FLOOR = 0.2;
+
+/** The soft-zoomed pane may not exceed this share of an axis. */
+export const SOFT_ZOOM_CEILING = 0.7;
+
+/** Matches the clamp SplitPaneView applies to hand-dragged dividers. */
+const SOFT_ZOOM_MAX_RATIO = 0.85;
+
+/** Rewrite one divider's ratio so `childIndex` receives `share` of the space. */
+function setShare(
+  tree: TreeNode,
+  nodeId: string,
+  childIndex: 0 | 1,
+  share: number,
+): TreeNode {
+  if (tree.type === "leaf") return tree;
+
+  if (tree.id === nodeId) {
+    return { ...tree, ratio: childIndex === 0 ? share : 1 - share };
+  }
+
+  const [left, right] = tree.children;
+  const newLeft = setShare(left, nodeId, childIndex, share);
+  const newRight = setShare(right, nodeId, childIndex, share);
+  if (newLeft === left && newRight === right) return tree;
+  return { ...tree, children: [newLeft, newRight] };
+}
+
+/** Whether every pane still fits between the floor and the ceiling on `axis`. */
+function withinBounds(tree: TreeNode, slotId: string, axis: "width" | "height"): boolean {
+  for (const extent of leafExtents(tree)) {
+    if (extent.slotId === slotId) {
+      if (extent[axis] > SOFT_ZOOM_CEILING + 1e-9) return false;
+    } else if (extent[axis] < SOFT_ZOOM_FLOOR - 1e-9) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Enlarge one pane by moving only the dividers on its own path to the root.
+ *
+ * The rows and columns keep their shape — this is the state the user would
+ * reach by dragging those same dividers by hand, which is the point: it reads
+ * as a layout they could have made, not a special mode.
+ *
+ * Dividers are spent greedily from the root outward. Spreading the growth
+ * evenly instead would squeeze any pane sitting under two path dividers twice
+ * over, hitting the floor sooner and yielding a smaller result.
+ *
+ * Each divider is solved by bisection rather than algebra. The constraint is on
+ * every *other* pane's final size, which compounds through the whole tree, so
+ * searching against `leafExtents` states the rule directly instead of
+ * re-deriving it per tree shape. Six leaves and 40 probes is nothing.
+ *
+ * Returns the input tree unchanged when there is nothing to do, so React
+ * identity checks downstream stay cheap.
+ */
+export function applySoftZoom(tree: TreeNode, slotId: string | null): TreeNode {
+  if (!slotId) return tree;
+
+  const path = findPath(tree, slotId);
+  if (path === null || path.length === 0) return tree;
+
+  let result = tree;
+
+  for (const axis of ["width", "height"] as const) {
+    const direction: SplitDirection = axis === "width" ? "vertical" : "horizontal";
+
+    for (const step of path) {
+      if (step.node.direction !== direction) continue;
+
+      // Ratios are the first child's share, so read the current share from the
+      // side our leaf is actually on.
+      const current =
+        step.childIndex === 0 ? step.node.ratio : 1 - step.node.ratio;
+
+      // Bisect for the largest share that keeps every pane in bounds. Starting
+      // the search at `current` is what stops a soft-zoom from ever shrinking a
+      // pane the user had already dragged wider.
+      let lo = current;
+      let hi = SOFT_ZOOM_MAX_RATIO;
+      let best = current;
+
+      for (let i = 0; i < 40; i++) {
+        const mid = (lo + hi) / 2;
+        const candidate = setShare(result, step.node.id, step.childIndex, mid);
+        if (withinBounds(candidate, slotId, axis)) {
+          best = mid;
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+
+      if (best !== current) {
+        result = setShare(result, step.node.id, step.childIndex, best);
+      }
+    }
+  }
+
+  return result;
+}
