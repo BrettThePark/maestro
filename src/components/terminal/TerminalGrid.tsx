@@ -1343,18 +1343,14 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     zoomedContainerRef.current.appendChild(container);
   }, [zoomedSlotId]);
 
-  const renderLeaf = useCallback((slotId: string) => {
-    const slot = slots.find((s) => s.id === slotId);
-    if (!slot) return null;
-
+  const renderSlotContent = useCallback((slot: SessionSlot) => {
     const dropOverlay = isDraggingFiles && dropTargetSlotId === slot.id && slot.sessionId !== null && (
       <div className="drop-zone-overlay">
         <span>Drop to paste path</span>
       </div>
     );
 
-    const container = getOrCreateContainer(slotId);
-    const isThisZoomed = zoomedSlotId === slotId;
+    const isThisZoomed = zoomedSlotId === slot.id;
 
     const content = slot.sessionId !== null ? (
       <>
@@ -1411,18 +1407,27 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       />
     );
 
-    // The pane content always renders into this slot's own detached container
-    // div, which PlaceholderLeaf parks in the grid (or the zoom overlay adopts).
-    // Returning a separate zoomed tree instead would unmount TerminalView and
-    // destroy the xterm canvas and scrollback — the black-screen-on-zoom bug.
-    return (
-      <>
-        {createPortal(content, container)}
-        <PlaceholderLeaf container={container} isZoomed={isThisZoomed} />
-      </>
-    );
+    return content;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Deps cover all render-affecting state
   }, [slots, focusedSlotId, isActive, isDraggingFiles, dropTargetSlotId, getFocusCallback, handleKill, handleToggleZoom, projectPath, branches, isLoadingBranches, isGitRepo, hasManagedWorktree, repositories, workspaceType, effectiveRepoPath, onRepoChange, mcpServers, skills, plugins, handleCreateBranch, updateSlotMode, updateSlotBranch, updateSlotWorktreeMode, refreshBranches, toggleSlotMcp, toggleSlotSkill, toggleSlotPlugin, selectAllMcp, unselectAllMcp, selectAllPlugins, unselectAllPlugins, launchSlot, removeSlot, updateSlotResumeSession, zoomedSlotId, getOrCreateContainer, softZoomedSlotId, handleToggleSoftZoom, handleMinimize]);
+
+  /**
+   * The grid leaf for a slot: just the parking spot for its container div.
+   *
+   * The container's *contents* are portaled in separately below, for every slot
+   * rather than only the ones in the tree — a minimized slot has no leaf here,
+   * and rendering its TerminalView from this callback would unmount it the
+   * moment it left the layout, destroying the xterm canvas and scrollback.
+   */
+  const renderLeaf = useCallback((slotId: string) => {
+    if (!slots.some((s) => s.id === slotId)) return null;
+    return (
+      <PlaceholderLeaf
+        container={getOrCreateContainer(slotId)}
+        isZoomed={zoomedSlotId === slotId}
+      />
+    );
+  }, [slots, zoomedSlotId, getOrCreateContainer]);
 
   const handleRatioChange = useCallback((nodeId: string, ratio: number) => {
     setLayoutTree((prev) => updateRatio(prev, nodeId, ratio));
@@ -1537,6 +1542,15 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
           />
         </div>
       </div>
+
+      {/* Every slot's terminal is portaled into its own detached container and
+          stays mounted for the life of the slot. Minimizing takes the slot's
+          leaf out of the layout, so nothing here may depend on tree membership:
+          rendering these from renderLeaf would tear the xterm down on minimize
+          and hand back a blank pane on restore. */}
+      {slots.map((slot) =>
+        createPortal(renderSlotContent(slot), getOrCreateContainer(slot.id), slot.id),
+      )}
 
       <MinimizedStrip slots={minimizedSlots} onRestore={handleRestore} />
     </div>
