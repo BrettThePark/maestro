@@ -44,9 +44,10 @@ import { useSessionStore } from "@/stores/useSessionStore";
 import type { AiMode } from "@/stores/useSessionStore";
 import { useWorkspaceStore, type RepositoryInfo, type WorkspaceType } from "@/stores/useWorkspaceStore";
 import { shellEscapePaths } from "@/lib/shellEscape";
+import { MinimizedStrip } from "./MinimizedStrip";
 import { PreLaunchCard, type SessionSlot } from "./PreLaunchCard";
 import { SplitPaneView } from "./SplitPaneView";
-import { createLeaf, splitLeaf, removeLeaf, updateRatio, collectSlotIds, findSiblingSlotId, buildGridTree, type TreeNode, type SplitDirection } from "./splitTree";
+import { createLeaf, splitLeaf, removeLeaf, updateRatio, collectSlotIds, findSiblingSlotId, buildGridTree, applySoftZoom, captureRestoreAnchor, restoreLeaf, type RestoreAnchor, type TreeNode, type SplitDirection } from "./splitTree";
 import { TerminalView } from "./TerminalView";
 
 /** Stable empty arrays to avoid infinite re-render loops in Zustand selectors. */
@@ -254,6 +255,14 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   // Binary split tree layout (drives pane arrangement)
   const [layoutTree, setLayoutTree] = useState<TreeNode>(() => createLeaf(slots[0].id));
 
+  // Slots parked in the minimized strip, each with where to put it back.
+  // Their PTYs keep running and their xterm containers stay detached but alive.
+  const [minimized, setMinimized] = useState<Map<string, RestoreAnchor | null>>(new Map());
+
+  // The single soft-zoomed slot. Unlike zoomedSlotId this changes no DOM parentage —
+  // it only biases the divider ratios the grid renders with.
+  const [softZoomedSlotId, setSoftZoomedSlotId] = useState<string | null>(null);
+
   // Track whether a divider is being dragged (disables xterm pointer events)
   const [isDragging, setIsDragging] = useState(false);
 
@@ -293,6 +302,14 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
   // Ordered slot IDs from the split tree (defines Cmd+1-9 ordering)
   const orderedSlotIds = useMemo(() => collectSlotIds(layoutTree), [layoutTree]);
+
+  // What actually gets rendered. layoutTree stays the layout the user built;
+  // soft-zoom is a transform applied on the way out, so releasing it needs no
+  // saved copy and a divider drag can simply overwrite the real ratio.
+  const displayTree = useMemo(
+    () => applySoftZoom(layoutTree, softZoomedSlotId),
+    [layoutTree, softZoomedSlotId],
+  );
 
   // Compute launched slots in tree order for keyboard navigation
   const launchedSlots = useMemo(() => {
@@ -1254,6 +1271,55 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     setZoomedSlotId(prev => prev === slotId ? null : slotId);
   }, []);
 
+  // Soft-zoom is exclusive: clicking another pane moves it rather than adding one.
+  const handleToggleSoftZoom = useCallback((slotId: string) => {
+    setSoftZoomedSlotId((prev) => (prev === slotId ? null : slotId));
+  }, []);
+
+  const handleMinimize = useCallback((slotId: string) => {
+    // Read the tree directly rather than from a setLayoutTree updater: the
+    // anchor has to be captured before the leaf is removed, and StrictMode
+    // invokes updaters twice, so recording it in there would be a side effect
+    // in a function that must stay pure.
+    const next = removeLeaf(layoutTree, slotId);
+    // Refuse to minimize the last pane — it would leave an empty grid with
+    // no obvious way back other than the strip.
+    if (next === null) return;
+
+    const anchor = captureRestoreAnchor(layoutTree, slotId);
+    setMinimized((m) => new Map(m).set(slotId, anchor));
+    setLayoutTree(next);
+
+    // A minimized pane cannot hold the zoom, and its container is about to be
+    // detached, so drop both claims on it.
+    setSoftZoomedSlotId((prev) => (prev === slotId ? null : prev));
+    setZoomedSlotId((prev) => (prev === slotId ? null : prev));
+    setFocusedSlotId((prev) => (prev === slotId ? null : prev));
+  }, [layoutTree]);
+
+  const handleRestore = useCallback((slotId: string) => {
+    setLayoutTree((prev) => {
+      const anchor = minimized.get(slotId) ?? null;
+      return restoreLeaf(prev, slotId, anchor, collectSlotIds(prev));
+    });
+    setMinimized((m) => {
+      const next = new Map(m);
+      next.delete(slotId);
+      return next;
+    });
+    setFocusedSlotId(slotId);
+  }, [minimized]);
+
+  // Slots in the strip, in the order they were minimized.
+  const minimizedSlots = useMemo(
+    () =>
+      [...minimized.keys()].flatMap((slotId) => {
+        const slot = slots.find((s) => s.id === slotId);
+        return slot ? [{ slotId, sessionId: slot.sessionId }] : [];
+      }),
+    [minimized, slots],
+  );
+
   // Handle Escape key to exit zoom mode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1302,6 +1368,9 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
           terminalCount={slots.length}
           isZoomed={isThisZoomed}
           onToggleZoom={() => handleToggleZoom(slot.id)}
+          isSoftZoomed={softZoomedSlotId === slot.id}
+          onToggleSoftZoom={() => handleToggleSoftZoom(slot.id)}
+          onMinimize={() => handleMinimize(slot.id)}
         />
         {dropOverlay}
       </>
@@ -1353,10 +1422,13 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       </>
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Deps cover all render-affecting state
-  }, [slots, focusedSlotId, isActive, isDraggingFiles, dropTargetSlotId, getFocusCallback, handleKill, handleToggleZoom, projectPath, branches, isLoadingBranches, isGitRepo, hasManagedWorktree, repositories, workspaceType, effectiveRepoPath, onRepoChange, mcpServers, skills, plugins, handleCreateBranch, updateSlotMode, updateSlotBranch, updateSlotWorktreeMode, refreshBranches, toggleSlotMcp, toggleSlotSkill, toggleSlotPlugin, selectAllMcp, unselectAllMcp, selectAllPlugins, unselectAllPlugins, launchSlot, removeSlot, updateSlotResumeSession, zoomedSlotId, getOrCreateContainer]);
+  }, [slots, focusedSlotId, isActive, isDraggingFiles, dropTargetSlotId, getFocusCallback, handleKill, handleToggleZoom, projectPath, branches, isLoadingBranches, isGitRepo, hasManagedWorktree, repositories, workspaceType, effectiveRepoPath, onRepoChange, mcpServers, skills, plugins, handleCreateBranch, updateSlotMode, updateSlotBranch, updateSlotWorktreeMode, refreshBranches, toggleSlotMcp, toggleSlotSkill, toggleSlotPlugin, selectAllMcp, unselectAllMcp, selectAllPlugins, unselectAllPlugins, launchSlot, removeSlot, updateSlotResumeSession, zoomedSlotId, getOrCreateContainer, softZoomedSlotId, handleToggleSoftZoom, handleMinimize]);
 
   const handleRatioChange = useCallback((nodeId: string, ratio: number) => {
     setLayoutTree((prev) => updateRatio(prev, nodeId, ratio));
+    // The user is now driving these dividers by hand. Keeping the transform on
+    // would immediately fight the drag, so hand control back.
+    setSoftZoomedSlotId(null);
   }, []);
 
   if (error) {
@@ -1458,13 +1530,15 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
             out, so the terminals left behind never refit to a zero-size box. */}
         <div className={`h-full p-2 ${isDragging ? "split-dragging" : ""} ${zoomedSlotId ? "invisible" : ""}`}>
           <SplitPaneView
-            node={layoutTree}
+            node={displayTree}
             renderLeaf={renderLeaf}
             onRatioChange={handleRatioChange}
             onDragStateChange={setIsDragging}
           />
         </div>
       </div>
+
+      <MinimizedStrip slots={minimizedSlots} onRestore={handleRestore} />
     </div>
   );
 });
