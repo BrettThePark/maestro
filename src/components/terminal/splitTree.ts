@@ -203,3 +203,65 @@ export function findSiblingSlotId(tree: TreeNode, slotId: string): string | null
   // Recurse
   return findSiblingSlotId(left, slotId) ?? findSiblingSlotId(right, slotId);
 }
+
+/** A leaf's share of the whole tree, as fractions of total width and height. */
+export interface LeafExtent {
+  slotId: string;
+  width: number;
+  height: number;
+}
+
+/**
+ * Compute every leaf's fractional width and height.
+ *
+ * Sizes compound down the tree, so a leaf nested under two vertical dividers
+ * is narrower than its immediate ratio suggests. Soft-zoom's floor check needs
+ * these final numbers rather than per-divider ratios, which is the whole reason
+ * this exists.
+ */
+export function leafExtents(tree: TreeNode, width = 1, height = 1): LeafExtent[] {
+  if (tree.type === "leaf") {
+    return [{ slotId: tree.slotId, width, height }];
+  }
+
+  const [first, second] = tree.children;
+  if (tree.direction === "vertical") {
+    return [
+      ...leafExtents(first, width * tree.ratio, height),
+      ...leafExtents(second, width * (1 - tree.ratio), height),
+    ];
+  }
+  return [
+    ...leafExtents(first, width, height * tree.ratio),
+    ...leafExtents(second, width, height * (1 - tree.ratio)),
+  ];
+}
+
+/** One divider on the way to a leaf, and which side of it the leaf is on. */
+export interface PathStep {
+  node: SplitNode;
+  childIndex: 0 | 1;
+}
+
+/**
+ * The dividers between the root and `slotId`, root-first.
+ *
+ * Root-first order matters: soft-zoom grants space greedily from the root
+ * outward, because spending the outer dividers first leaves more room for the
+ * inner ones (see `applySoftZoom`).
+ *
+ * Returns `null` when the slot is not in the tree, `[]` when it is the root.
+ */
+export function findPath(tree: TreeNode, slotId: string): PathStep[] | null {
+  if (tree.type === "leaf") {
+    return tree.slotId === slotId ? [] : null;
+  }
+
+  for (const childIndex of [0, 1] as const) {
+    const sub = findPath(tree.children[childIndex], slotId);
+    if (sub !== null) {
+      return [{ node: tree, childIndex }, ...sub];
+    }
+  }
+  return null;
+}
