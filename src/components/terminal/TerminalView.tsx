@@ -14,7 +14,7 @@ import { ActivityFeed } from "@/components/session/ActivityFeed";
 import { isGitWorktree } from "@/lib/git";
 import { useSessionBranch } from "@/hooks/useSessionBranch";
 import { buildFontFamily, waitForFont } from "@/lib/fonts";
-import { getBackendInfo, killSession, onPtyOutput, resizePty, savePastedImage, signalTerminalReady, writeStdin, type BackendInfo } from "@/lib/terminal";
+import { getBackendInfo, killSession, onPtyOutput, resizePty, savePastedImage, shouldForwardResize, signalTerminalReady, writeStdin, type BackendInfo } from "@/lib/terminal";
 import { DEFAULT_THEME, LIGHT_THEME, toXtermTheme } from "@/lib/terminalTheme";
 import { useMcpStore } from "@/stores/useMcpStore";
 import { useReviewStore } from "@/stores/useReviewStore";
@@ -531,6 +531,7 @@ export const TerminalView = memo(function TerminalView({
       });
 
       resizeDisposable = term.onResize(({ rows, cols }) => {
+        if (!shouldForwardResize(cols, rows)) return;
         resizePty(sessionId, rows, cols).catch(console.error);
       });
 

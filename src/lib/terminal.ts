@@ -32,6 +32,18 @@ export async function writeStdin(sessionId: number, data: string): Promise<void>
 }
 
 /** Notifies the backend PTY of a terminal dimension change (rows x cols). */
+/**
+ * Whether a terminal resize is safe to forward to the PTY.
+ *
+ * A minimized pane's container is detached from the DOM, where a fit can
+ * propose collapsed or non-finite dimensions. Forwarding those reflows the
+ * running agent's output with no way back, so anything below a 2x2 cell grid
+ * is dropped — the ResizeObserver refits and sends a real size on reattach.
+ */
+export function shouldForwardResize(cols: number, rows: number): boolean {
+  return Number.isFinite(cols) && Number.isFinite(rows) && cols >= 2 && rows >= 2;
+}
+
 export async function resizePty(sessionId: number, rows: number, cols: number): Promise<void> {
   return invoke("resize_pty", { sessionId, rows, cols });
 }
