@@ -43,6 +43,9 @@ interface TerminalViewProps {
   terminalCount?: number;
   isZoomed?: boolean;
   onToggleZoom?: () => void;
+  isSoftZoomed?: boolean;
+  onToggleSoftZoom?: () => void;
+  onMinimize?: () => void;
 }
 
 /** Map backend AiMode to frontend AIProvider */
@@ -121,6 +124,9 @@ export const TerminalView = memo(function TerminalView({
   terminalCount = 1,
   isZoomed = false,
   onToggleZoom,
+  isSoftZoomed = false,
+  onToggleSoftZoom,
+  onMinimize,
 }: TerminalViewProps) {
   const sessionData = useSessionStore(
     useShallow((s) => {
@@ -733,6 +739,9 @@ export const TerminalView = memo(function TerminalView({
         terminalCount={terminalCount}
         isZoomed={isZoomed}
         onToggleZoom={onToggleZoom}
+        isSoftZoomed={isSoftZoomed}
+        onToggleSoftZoom={onToggleSoftZoom}
+        onMinimize={onMinimize}
         zoomLevel={zoomLevel}
         onSetZoomLevel={setZoomLevel}
       />

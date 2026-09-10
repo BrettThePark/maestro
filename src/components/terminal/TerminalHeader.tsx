@@ -7,7 +7,10 @@ import {
   Expand,
   GitBranch,
   GitCompareArrows,
+  Maximize2,
   Minimize,
+  Minimize2,
+  Minus,
   Sparkles,
   Terminal,
   X,
@@ -38,6 +41,12 @@ interface TerminalHeaderProps {
   onToggleZoom?: () => void;
   zoomLevel?: number;
   onSetZoomLevel?: (level: number) => void;
+  /** Whether this pane currently holds the grid's single soft-zoom. */
+  isSoftZoomed?: boolean;
+  /** Grow this pane within the grid, or release it if it already holds the zoom. */
+  onToggleSoftZoom?: () => void;
+  /** Send this pane to the minimized strip. Session keeps running. */
+  onMinimize?: () => void;
 }
 
 const STATUS_COLOR: Record<SessionStatus, string> = {
@@ -87,6 +96,9 @@ export const TerminalHeader = memo(function TerminalHeader({
   onToggleZoom,
   zoomLevel = 100,
   onSetZoomLevel,
+  isSoftZoomed = false,
+  onToggleSoftZoom,
+  onMinimize,
 }: TerminalHeaderProps) {
   const { icon: ProviderIcon, label: providerLabel } = providerConfig[provider];
   const [showZoomMenu, setShowZoomMenu] = useState(false);
@@ -333,6 +345,36 @@ export const TerminalHeader = memo(function TerminalHeader({
             className="rounded bg-maestro-green px-1.5 py-0.5 font-medium text-white transition-colors hover:bg-maestro-green/80 text-[9px]"
           >
             Launch
+          </button>
+        )}
+
+        {/* Soft-zoom toggle — grows this pane inside the grid rather than over it */}
+        {onToggleSoftZoom && (
+          <button
+            type="button"
+            onClick={() => onToggleSoftZoom()}
+            className={`rounded p-0.5 transition-colors hover:bg-maestro-card hover:text-maestro-accent ${
+              isSoftZoomed ? "text-maestro-accent" : "text-maestro-muted"
+            }`}
+            title={isSoftZoomed ? "Even out pane sizes" : "Enlarge pane"}
+            aria-label={isSoftZoomed ? "Even out pane sizes" : "Enlarge pane"}
+          >
+            {isSoftZoomed
+              ? <Minimize2 size={terminalCount <= 4 ? 14 : 12} />
+              : <Maximize2 size={terminalCount <= 4 ? 14 : 12} />}
+          </button>
+        )}
+
+        {/* Minimize to the strip — distinct from the zoom toggle's restore action */}
+        {onMinimize && (
+          <button
+            type="button"
+            onClick={() => onMinimize()}
+            className="rounded p-0.5 text-maestro-muted transition-colors hover:bg-maestro-card hover:text-maestro-accent"
+            title="Minimize session"
+            aria-label="Minimize session"
+          >
+            <Minus size={terminalCount <= 4 ? 14 : 12} />
           </button>
         )}
 
