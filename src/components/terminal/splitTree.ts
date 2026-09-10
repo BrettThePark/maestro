@@ -371,3 +371,99 @@ export function applySoftZoom(tree: TreeNode, slotId: string | null): TreeNode {
 
   return result;
 }
+
+/**
+ * Everything needed to put a minimized pane back where it was.
+ *
+ * Recorded against a neighbour slot rather than a node id, because the parent
+ * SplitNode ceases to exist the moment the leaf is removed — `removeLeaf`
+ * promotes the sibling in its place.
+ */
+export interface RestoreAnchor {
+  /** A slot in the sibling subtree, used to find the reinsertion point. */
+  siblingSlotId: string;
+  /** Which child index the leaf occupied, so it returns to the same side. */
+  side: 0 | 1;
+  direction: SplitDirection;
+  /** The parent split's ratio at the time of minimizing. */
+  ratio: number;
+}
+
+/** Record where `slotId` sits, to be replayed by `restoreLeaf`. Call before removing it. */
+export function captureRestoreAnchor(tree: TreeNode, slotId: string): RestoreAnchor | null {
+  const path = findPath(tree, slotId);
+  if (path === null || path.length === 0) return null;
+
+  const parent = path[path.length - 1];
+  const sibling = parent.node.children[parent.childIndex === 0 ? 1 : 0];
+  const siblingSlotId = collectSlotIds(sibling)[0];
+  if (!siblingSlotId) return null;
+
+  return {
+    siblingSlotId,
+    side: parent.childIndex,
+    direction: parent.node.direction,
+    ratio: parent.node.ratio,
+  };
+}
+
+/**
+ * Split `targetSlotId`'s leaf, placing `newSlotId` on the given side at the
+ * given ratio.
+ *
+ * `splitLeaf` covers the common case but always appends the new leaf second at
+ * an even ratio; restoring a pane needs to reproduce a specific arrangement.
+ */
+export function insertLeafBeside(
+  tree: TreeNode,
+  targetSlotId: string,
+  newSlotId: string,
+  direction: SplitDirection,
+  side: 0 | 1,
+  ratio: number,
+): TreeNode {
+  if (tree.type === "leaf") {
+    if (tree.slotId !== targetSlotId) return tree;
+    const fresh = createLeaf(newSlotId);
+    return {
+      type: "split",
+      id: uid(),
+      direction,
+      children: side === 0 ? [fresh, tree] : [tree, fresh],
+      ratio,
+    };
+  }
+
+  const [left, right] = tree.children;
+  const newLeft = insertLeafBeside(left, targetSlotId, newSlotId, direction, side, ratio);
+  const newRight = insertLeafBeside(right, targetSlotId, newSlotId, direction, side, ratio);
+  if (newLeft === left && newRight === right) return tree;
+  return { ...tree, children: [newLeft, newRight] };
+}
+
+/**
+ * Put a minimized pane back.
+ *
+ * Uses the anchor when its neighbour is still on screen, so a layout the user
+ * hand-tuned returns exactly as it was. When that neighbour has since been
+ * closed or minimized there is no meaningful "where it was" left, so fall back
+ * to a balanced rebuild — the same thing Add Session does.
+ */
+export function restoreLeaf(
+  tree: TreeNode,
+  slotId: string,
+  anchor: RestoreAnchor | null,
+  visibleSlotIds: string[],
+): TreeNode {
+  if (anchor && visibleSlotIds.includes(anchor.siblingSlotId)) {
+    return insertLeafBeside(
+      tree,
+      anchor.siblingSlotId,
+      slotId,
+      anchor.direction,
+      anchor.side,
+      anchor.ratio,
+    );
+  }
+  return buildGridTree([...visibleSlotIds, slotId]);
+}
