@@ -343,37 +343,44 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     return () => clearTimeout(handle);
   }, [tabId, slots, layoutTree, minimized, claudeUuidBySession, setPaneLayout]);
 
-  // Reconcile restored panes with the world as it is now. Gated on the branch
-  // list having loaded — validating against an empty list would flag every
-  // branch as missing — and run once, so a later branch refresh cannot
-  // re-annotate cards the user has already dealt with.
+  // The registries validation reads, kept in a ref so that one of them arriving
+  // mid-flight cannot cancel the run. `branches` in particular loads
+  // asynchronously moments after mount, so it is guaranteed to change while the
+  // transcript lookup below is still in the air.
+  const validationInputsRef = useRef({ branches, mcpServers, skills, plugins });
+  validationInputsRef.current = { branches, mcpServers, skills, plugins };
+
+  // Reconcile restored panes with the world as it is now, once, after the branch
+  // list has loaded — validating against an empty list would flag every branch
+  // as missing.
+  //
+  // Deliberately not cancelled on re-run: the flag is set before awaiting to
+  // stop a second run starting, so cancelling the first would mean validation
+  // never applies at all. Applying to an unmounted grid is a no-op in React 18.
   const validatedRef = useRef(false);
   useEffect(() => {
     if (!restored || validatedRef.current || isLoadingBranches || !projectPath) return;
     validatedRef.current = true;
 
-    let cancelled = false;
-    (async () => {
+    void (async () => {
       const claudeSessions = await listClaudeSessions(projectPath).catch(() => []);
-      if (cancelled) return;
+      const inputs = validationInputsRef.current;
 
       const ctx: RestoreContext = {
-        branchNames: new Set(branches.map((b) => b.name)),
-        currentBranch: branches.find((b) => b.isCurrent)?.name ?? null,
-        worktreeBranches: new Set(branches.filter((b) => b.hasWorktree).map((b) => b.name)),
+        branchNames: new Set(inputs.branches.map((b) => b.name)),
+        currentBranch: inputs.branches.find((b) => b.isCurrent)?.name ?? null,
+        worktreeBranches: new Set(
+          inputs.branches.filter((b) => b.hasWorktree).map((b) => b.name),
+        ),
         claudeSessionIds: new Set(claudeSessions.map((cs) => cs.session_id)),
-        mcpServerNames: new Set(mcpServers.map((m) => m.name)),
-        skillIds: new Set(skills.map((sk) => sk.id)),
-        pluginIds: new Set(plugins.map((pl) => pl.id)),
+        mcpServerNames: new Set(inputs.mcpServers.map((m) => m.name)),
+        skillIds: new Set(inputs.skills.map((sk) => sk.id)),
+        pluginIds: new Set(inputs.plugins.map((pl) => pl.id)),
       };
 
       setSlots((prev) => prev.map((slot) => validateRestoredSlot(slot, ctx)));
     })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [restored, isLoadingBranches, branches, projectPath, mcpServers, skills, plugins]);
+  }, [restored, isLoadingBranches, projectPath]);
 
 
   // Compute launched slots in tree order for keyboard navigation
