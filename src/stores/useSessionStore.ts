@@ -68,6 +68,13 @@ interface SessionStatusPayload {
  */
 interface SessionState {
   sessions: SessionConfig[];
+  /**
+   * Claude's own conversation UUID per Maestro session, learned from the
+   * SessionStart hook. Maestro's session id is a numeric PTY id; this is the
+   * only handle on the conversation itself, and it is what makes a pane
+   * resumable after a restart.
+   */
+  claudeUuidBySession: Record<number, string>;
   isLoading: boolean;
   error: string | null;
   fetchSessions: () => Promise<void>;
@@ -78,6 +85,7 @@ interface SessionState {
   updateSession: (sessionId: number, updates: Partial<SessionConfig>) => void;
   renameSession: (sessionId: number, name: string | null) => Promise<void>;
   getSessionsByProject: (projectPath: string) => SessionConfig[];
+  setClaudeUuid: (sessionId: number, uuid: string) => void;
   initListeners: () => Promise<UnlistenFn>;
 }
 
@@ -121,6 +129,7 @@ function clearStartupTimeout(sessionId: number): void {
 
 export const useSessionStore = create<SessionState>()((set, get) => ({
   sessions: [],
+  claudeUuidBySession: {},
   isLoading: false,
   error: null,
 
@@ -216,6 +225,17 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         return state;
       }
       return { sessions: [...state.sessions, session] };
+    });
+  },
+
+  setClaudeUuid: (sessionId: number, uuid: string) => {
+    set((state) => {
+      // Returning the identical object keeps the snapshot effect that depends
+      // on this map from re-running on every repeated hook fire.
+      if (state.claudeUuidBySession[sessionId] === uuid) return state;
+      return {
+        claudeUuidBySession: { ...state.claudeUuidBySession, [sessionId]: uuid },
+      };
     });
   },
 

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ClaudeEvent } from "@/types/claude-events";
+import { useSessionStore } from "./useSessionStore";
 
 interface SessionActivity {
   events: ClaudeEvent[];
@@ -86,6 +87,15 @@ export async function initActivityListener(): Promise<void> {
   if (unlisten) return;
   unlisten = await listen<ClaudeEvent>("claude-event", (event) => {
     useActivityStore.getState().addEvent(event.payload);
+
+    // SessionStart is the only place Claude's own conversation id is exposed.
+    // Recording it here is what lets a restored pane offer to resume the exact
+    // conversation that pane was driving, rather than a guess.
+    if (event.payload.event_type === "SessionStarted") {
+      useSessionStore
+        .getState()
+        .setClaudeUuid(event.payload.session_id, event.payload.claude_session_uuid);
+    }
   });
 }
 
