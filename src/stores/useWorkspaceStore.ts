@@ -79,6 +79,7 @@ type WorkspaceActions = {
   /** Set or clear a custom worktree base path for a project tab. */
   setWorktreeBasePath: (tabId: string, path: string | null) => void;
   setPaneLayout: (tabId: string, layout: PersistedPaneLayout) => void;
+  clearPaneLayout: (tabId: string) => void;
   /** Reorder tabs by moving activeId to overId's position. Used by drag-and-drop. */
   reorderTabs: (activeId: string, overId: string) => void;
   /** Move a tab one position left or right. Used by keyboard shortcut. */
@@ -333,6 +334,14 @@ export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>()(
         set({
           tabs: get().tabs.map((t) =>
             t.id === tabId ? { ...t, paneLayout: layout } : t
+          ),
+        });
+      },
+
+      clearPaneLayout: (tabId: string) => {
+        set({
+          tabs: get().tabs.map((t) =>
+            t.id === tabId ? { ...t, paneLayout: undefined } : t
           ),
         });
       },

@@ -159,3 +159,37 @@ describe("hasRestorablePanes", () => {
     );
   });
 });
+
+describe("fromPaneLayout worktree handling", () => {
+  it("reattaches to an existing worktree rather than forcing a new one", () => {
+    const layout = toPaneLayout(
+      [slot("a", { worktreeMode: "new", worktreePath: "/tmp/wt" })],
+      buildGridTree(["a"]),
+      new Map(),
+      {},
+    );
+    const restored = fromPaneLayout(layout);
+    expect(restored?.slots[0].worktreeMode).toBe("auto");
+    expect(restored?.slots[0].worktreePath).toBe("/tmp/wt");
+  });
+
+  it("leaves 'new' alone when no worktree was ever created", () => {
+    const layout = toPaneLayout(
+      [slot("a", { worktreeMode: "new", worktreePath: null })],
+      buildGridTree(["a"]),
+      new Map(),
+      {},
+    );
+    expect(fromPaneLayout(layout)?.slots[0].worktreeMode).toBe("new");
+  });
+
+  it("leaves other worktree modes untouched", () => {
+    const layout = toPaneLayout(
+      [slot("a", { worktreeMode: "project", worktreePath: "/tmp/wt" })],
+      buildGridTree(["a"]),
+      new Map(),
+      {},
+    );
+    expect(fromPaneLayout(layout)?.slots[0].worktreeMode).toBe("project");
+  });
+});

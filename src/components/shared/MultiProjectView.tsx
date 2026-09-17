@@ -26,6 +26,7 @@ export const MultiProjectView = forwardRef<MultiProjectViewHandle, MultiProjectV
   function MultiProjectView({ onSessionCountChange }, ref) {
   const tabs = useWorkspaceStore((s) => s.tabs);
   const setSessionsLaunched = useWorkspaceStore((s) => s.setSessionsLaunched);
+  const clearPaneLayout = useWorkspaceStore((s) => s.clearPaneLayout);
   const setSelectedRepo = useWorkspaceStore((s) => s.setSelectedRepo);
   const gridRefs = useRef<Map<string, TerminalGridHandle>>(new Map());
 
@@ -83,10 +84,14 @@ export const MultiProjectView = forwardRef<MultiProjectViewHandle, MultiProjectV
     for (const tab of tabs) {
       callbacks.set(tab.id, () => {
         setSessionsLaunched(tab.id, false);
+        // Closing every session means there is nothing left to restore. Without
+        // this the saved layout would keep the grid mounted and the user could
+        // never get back to the idle screen.
+        clearPaneLayout(tab.id);
       });
     }
     return callbacks;
-  }, [tabs, setSessionsLaunched]);
+  }, [tabs, setSessionsLaunched, clearPaneLayout]);
 
   // Stable repo change callbacks per tab
   const repoChangeCallbacks = useMemo(() => {

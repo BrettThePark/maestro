@@ -99,7 +99,11 @@ export function fromPaneLayout(
     id: s.id,
     mode: s.mode,
     branch: s.branch,
-    worktreeMode: s.worktreeMode,
+    // "new" is an instruction to create a worktree, and it was already carried
+    // out — the path is right there. Restoring it verbatim would mint a second
+    // worktree on launch (worktreeMode === "new" forces one), stranding the
+    // work in the first. "auto" reattaches to the existing one instead.
+    worktreeMode: s.worktreeMode === "new" && s.worktreePath ? "auto" : s.worktreeMode,
     sessionId: null,
     worktreePath: s.worktreePath,
     worktreeWarning: null,
