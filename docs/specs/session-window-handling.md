@@ -42,6 +42,12 @@ separate, third thing.
 - Surviving app restart. `layoutTree` and `slots` are already `TerminalGrid`
   component state; only the `tabs` array is persisted (`useWorkspaceStore.ts:362`).
   Minimized and soft-zoomed state is ephemeral for the same reason the layout is.
+
+  > **Superseded 2026-09-17.** `docs/specs/session-restore-on-restart.md`
+  > deliberately reverses this: the layout tree, the minimized set and each
+  > pane's configuration are now snapshotted onto the tab and restored as
+  > pre-filled pre-launch cards. Soft-zoom remains ephemeral — it is a view
+  > state, not a layout the user built.
 - Minimizing a session into a different project's strip.
 - Drag-to-reorder within the minimized strip.
 - Raising `MAX_SESSIONS`. A minimized session holds a live PTY and still counts
