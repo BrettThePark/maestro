@@ -56,6 +56,12 @@ export interface SessionSlot {
   enabledPlugins: string[];
   /** Claude session UUID to resume, if resuming a previous session. */
   resumeSessionId?: string | null;
+  /**
+   * Why a restored pane differs from what was saved (missing branch, pruned
+   * worktree, deleted conversation). Shown on the card so a restored session
+   * never quietly misrepresents itself. Cleared once the user edits the slot.
+   */
+  restoreNotes?: string[];
 }
 
 interface PreLaunchCardProps {

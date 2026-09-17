@@ -130,3 +130,87 @@ export function fromPaneLayout(
     minimized,
   };
 }
+
+/** What a restored slot is checked against. All lookups the caller already has. */
+export interface RestoreContext {
+  branchNames: ReadonlySet<string>;
+  currentBranch: string | null;
+  /** Branches that currently have a worktree checked out. */
+  worktreeBranches: ReadonlySet<string>;
+  /** Conversation UUIDs still present in Claude's own storage. */
+  claudeSessionIds: ReadonlySet<string>;
+  mcpServerNames: ReadonlySet<string>;
+  skillIds: ReadonlySet<string>;
+  pluginIds: ReadonlySet<string>;
+}
+
+/**
+ * Reconcile one restored slot with the world as it is now.
+ *
+ * Every fallback is accompanied by a note. Launching a session against a branch
+ * that was deleted, or a worktree the user pruned, is worse than saying so —
+ * the card is a promise about what will happen when Launch is clicked, and it
+ * has to be one the app can keep.
+ *
+ * Returns the input object untouched when nothing changed, so the common case
+ * costs no re-render.
+ */
+export function validateRestoredSlot(slot: SessionSlot, ctx: RestoreContext): SessionSlot {
+  const notes: string[] = [];
+  const next: SessionSlot = { ...slot };
+
+  if (next.branch !== null && !ctx.branchNames.has(next.branch)) {
+    notes.push(
+      ctx.currentBranch
+        ? `Branch "${next.branch}" no longer exists — using "${ctx.currentBranch}".`
+        : `Branch "${next.branch}" no longer exists.`,
+    );
+    next.branch = ctx.currentBranch;
+  }
+
+  // "project" runs in the repo itself and needs no worktree; the other modes do.
+  const wantsWorktree = next.worktreeMode !== "project";
+  if (wantsWorktree && (next.branch === null || !ctx.worktreeBranches.has(next.branch))) {
+    notes.push("Its worktree no longer exists — running in the project directory.");
+    next.worktreeMode = "project";
+    next.worktreePath = null;
+  }
+
+  if (next.resumeSessionId !== null && next.resumeSessionId !== undefined) {
+    // Only Claude has a resume picker, so a stale id on any other mode is
+    // simply dropped rather than explained.
+    if (next.mode !== "Claude") {
+      next.resumeSessionId = null;
+    } else if (!ctx.claudeSessionIds.has(next.resumeSessionId)) {
+      notes.push("Its saved conversation is no longer available to resume.");
+      next.resumeSessionId = null;
+    }
+  }
+
+  const keptMcp = next.enabledMcpServers.filter((n) => ctx.mcpServerNames.has(n));
+  if (keptMcp.length !== next.enabledMcpServers.length) {
+    notes.push(
+      `${next.enabledMcpServers.length - keptMcp.length} MCP server(s) are no longer installed.`,
+    );
+    next.enabledMcpServers = keptMcp;
+  }
+
+  const keptSkills = next.enabledSkills.filter((id) => ctx.skillIds.has(id));
+  if (keptSkills.length !== next.enabledSkills.length) {
+    notes.push(`${next.enabledSkills.length - keptSkills.length} skill(s) are no longer installed.`);
+    next.enabledSkills = keptSkills;
+  }
+
+  const keptPlugins = next.enabledPlugins.filter((id) => ctx.pluginIds.has(id));
+  if (keptPlugins.length !== next.enabledPlugins.length) {
+    notes.push(
+      `${next.enabledPlugins.length - keptPlugins.length} plugin(s) are no longer installed.`,
+    );
+    next.enabledPlugins = keptPlugins;
+  }
+
+  if (notes.length === 0 && next.resumeSessionId === slot.resumeSessionId) return slot;
+
+  next.restoreNotes = notes.length > 0 ? notes : undefined;
+  return next;
+}
