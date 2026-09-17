@@ -23,6 +23,7 @@ import {
   checkCliAvailable,
   createSession,
   killSession,
+  listClaudeSessions,
   removeSessionHooksConfig,
   spawnShell,
   waitForTerminalReady,
@@ -43,6 +44,7 @@ import { useWindowFocus } from "@/hooks/useWindowFocus";
 import { useSessionStore } from "@/stores/useSessionStore";
 import type { AiMode } from "@/stores/useSessionStore";
 import { useWorkspaceStore, type RepositoryInfo, type WorkspaceType } from "@/stores/useWorkspaceStore";
+import { fromPaneLayout, toPaneLayout, validateRestoredSlot, type RestoreContext, type RestoredPanes } from "@/lib/paneSnapshot";
 import { shellEscapePaths } from "@/lib/shellEscape";
 import { MinimizedStrip } from "./MinimizedStrip";
 import { PreLaunchCard, type SessionSlot } from "./PreLaunchCard";
@@ -225,7 +227,19 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   const fetchPlugins = usePluginStore((s) => s.fetchProjectPlugins);
 
   // Track session slots (pre-launch and launched)
-  const [slots, setSlots] = useState<SessionSlot[]>(() => [createEmptySlot()]);
+  // Panes saved when the app last closed, read once at mount. A lazy ref rather
+  // than useMemo because this must resolve before the useState initialisers
+  // below run, and must never recompute — this component rewrites that store
+  // entry moments after mounting.
+  const restoredRef = useRef<RestoredPanes | null | undefined>(undefined);
+  if (restoredRef.current === undefined) {
+    restoredRef.current = fromPaneLayout(
+      useWorkspaceStore.getState().tabs.find((t) => t.id === tabId)?.paneLayout,
+    );
+  }
+  const restored = restoredRef.current;
+
+  const [slots, setSlots] = useState<SessionSlot[]>(() => restored?.slots ?? [createEmptySlot()]);
   const [error, setError] = useState<string | null>(null);
 
   // Track which terminal slot is focused (by slot ID)
@@ -253,11 +267,15 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   }, []);
 
   // Binary split tree layout (drives pane arrangement)
-  const [layoutTree, setLayoutTree] = useState<TreeNode>(() => createLeaf(slots[0].id));
+  const [layoutTree, setLayoutTree] = useState<TreeNode>(
+    () => restored?.tree ?? createLeaf(slots[0].id),
+  );
 
   // Slots parked in the minimized strip, each with where to put it back.
   // Their PTYs keep running and their xterm containers stay detached but alive.
-  const [minimized, setMinimized] = useState<Map<string, RestoreAnchor | null>>(new Map());
+  const [minimized, setMinimized] = useState<Map<string, RestoreAnchor | null>>(
+    () => restored?.minimized ?? new Map(),
+  );
 
   // The single soft-zoomed slot. Unlike zoomedSlotId this changes no DOM parentage —
   // it only biases the divider ratios the grid renders with.
@@ -310,6 +328,53 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     () => applySoftZoom(layoutTree, softZoomedSlotId),
     [layoutTree, softZoomedSlotId],
   );
+
+  const setPaneLayout = useWorkspaceStore((s) => s.setPaneLayout);
+  const claudeUuidBySession = useSessionStore((s) => s.claudeUuidBySession);
+
+  // Persist the arrangement so the next launch can offer it back. Debounced
+  // because dragging a divider fires continuously and every write reaches disk.
+  useEffect(() => {
+    // A grid with no tab has nowhere to save to.
+    if (!tabId) return;
+    const handle = setTimeout(() => {
+      setPaneLayout(tabId, toPaneLayout(slots, layoutTree, minimized, claudeUuidBySession));
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [tabId, slots, layoutTree, minimized, claudeUuidBySession, setPaneLayout]);
+
+  // Reconcile restored panes with the world as it is now. Gated on the branch
+  // list having loaded — validating against an empty list would flag every
+  // branch as missing — and run once, so a later branch refresh cannot
+  // re-annotate cards the user has already dealt with.
+  const validatedRef = useRef(false);
+  useEffect(() => {
+    if (!restored || validatedRef.current || isLoadingBranches || !projectPath) return;
+    validatedRef.current = true;
+
+    let cancelled = false;
+    (async () => {
+      const claudeSessions = await listClaudeSessions(projectPath).catch(() => []);
+      if (cancelled) return;
+
+      const ctx: RestoreContext = {
+        branchNames: new Set(branches.map((b) => b.name)),
+        currentBranch: branches.find((b) => b.isCurrent)?.name ?? null,
+        worktreeBranches: new Set(branches.filter((b) => b.hasWorktree).map((b) => b.name)),
+        claudeSessionIds: new Set(claudeSessions.map((cs) => cs.session_id)),
+        mcpServerNames: new Set(mcpServers.map((m) => m.name)),
+        skillIds: new Set(skills.map((sk) => sk.id)),
+        pluginIds: new Set(plugins.map((pl) => pl.id)),
+      };
+
+      setSlots((prev) => prev.map((slot) => validateRestoredSlot(slot, ctx)));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [restored, isLoadingBranches, branches, projectPath, mcpServers, skills, plugins]);
+
 
   // Compute launched slots in tree order for keyboard navigation
   const launchedSlots = useMemo(() => {
@@ -1021,10 +1086,13 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   /**
    * Updates the AI mode for a slot.
    */
+  // Each of the slot-config updaters below also clears restoreNotes: a note
+  // explaining what a restored pane fell back to is noise once the user has
+  // chosen that value themselves.
   const updateSlotMode = useCallback((slotId: string, mode: AiMode) => {
     setSlots((prev) =>
       prev.map((s) =>
-        s.id === slotId ? { ...s, mode, resumeSessionId: mode !== "Claude" ? null : s.resumeSessionId } : s
+        s.id === slotId ? { ...s, mode, resumeSessionId: mode !== "Claude" ? null : s.resumeSessionId, restoreNotes: undefined } : s
       )
     );
   }, []);
@@ -1032,7 +1100,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   const updateSlotResumeSession = useCallback((slotId: string, sessionId: string | null) => {
     setSlots((prev) =>
       prev.map((s) =>
-        s.id === slotId ? { ...s, resumeSessionId: sessionId } : s
+        s.id === slotId ? { ...s, resumeSessionId: sessionId, restoreNotes: undefined } : s
       )
     );
   }, []);
@@ -1045,7 +1113,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     // First update the branch
     setSlots((prev) =>
       prev.map((s) =>
-        s.id === slotId ? { ...s, branch } : s
+        s.id === slotId ? { ...s, branch, restoreNotes: undefined } : s
       )
     );
 
@@ -1080,7 +1148,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   const updateSlotWorktreeMode = useCallback((slotId: string, mode: import("./PreLaunchCard").WorktreeMode) => {
     setSlots((prev) =>
       prev.map((s) =>
-        s.id === slotId ? { ...s, worktreeMode: mode } : s
+        s.id === slotId ? { ...s, worktreeMode: mode, restoreNotes: undefined } : s
       )
     );
   }, []);
