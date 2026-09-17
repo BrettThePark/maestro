@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   BrainCircuit,
   Check,
   ChevronDown,
@@ -449,6 +450,26 @@ export function PreLaunchCard({
             </button>
           </div>
         </div>
+
+        {/* Why this restored pane differs from what was saved. */}
+        {slot.restoreNotes && slot.restoreNotes.length > 0 && (
+          <div
+            role="status"
+            className="rounded-md border border-maestro-yellow/30 bg-maestro-yellow/10 px-2 py-1.5"
+          >
+            <ul className="flex flex-col gap-1">
+              {slot.restoreNotes.map((note) => (
+                <li
+                  key={note}
+                  className="flex items-start gap-1.5 text-[10px] leading-snug text-maestro-yellow"
+                >
+                  <AlertTriangle size={10} className="mt-0.5 shrink-0" />
+                  <span>{note}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* AI Mode Selector */}
         <div className="relative" ref={modeDropdownRef}>
