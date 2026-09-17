@@ -67,4 +67,19 @@ describe("PreLaunchCard restore notes", () => {
     renderCard();
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  // globals.css gives .terminal-cell `overflow: hidden` as plain CSS after
+  // @tailwind utilities, so it beats an overflow utility on the same element at
+  // equal specificity. The scroll container must therefore be a descendant, or
+  // a card taller than its pane silently becomes unreachable.
+  it("scrolls inside the clipped cell, not on it", () => {
+    const { container } = renderCard();
+
+    const cell = container.querySelector(".terminal-cell");
+    expect(cell).not.toBeNull();
+    expect(cell?.className).not.toMatch(/overflow-y-auto/);
+
+    const scroller = container.querySelector(".terminal-cell .overflow-y-auto");
+    expect(scroller).not.toBeNull();
+  });
 });

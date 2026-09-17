@@ -420,13 +420,18 @@ export function PreLaunchCard({
   const selectedRepoName = selectedRepo?.name ?? getRepoDisplayName(selectedRepoPath ?? "");
 
   return (
-    // Scroll container and centering are split deliberately. A flex parent that
-    // both centres and scrolls clips the overflow at the top, putting the header
-    // out of reach — the inner wrapper's min-h-full centres while there is room
-    // and grows past it when the card is taller than the pane, which it often is
-    // once a branch list, MCP list and restore notes are all present.
-    <div className="content-dark terminal-cell h-full overflow-y-auto bg-maestro-bg">
-      <div className="flex min-h-full flex-col items-center justify-center p-4">
+    // Three nested elements, each load-bearing:
+    //   .terminal-cell  — rounded border and `overflow: hidden` from globals.css.
+    //                     That rule is plain CSS after @tailwind utilities, so it
+    //                     beats an overflow utility here at equal specificity; the
+    //                     scroller cannot live on this element.
+    //   scroller        — owns the scrolling, inside the clip.
+    //   centring wrapper— min-h-full centres while there is room and grows past it
+    //                     when there is not. Centring on the scroller itself would
+    //                     clip the top of an overflowing card out of reach.
+    <div className="content-dark terminal-cell h-full bg-maestro-bg">
+      <div className="h-full overflow-y-auto">
+        <div className="flex min-h-full flex-col items-center justify-center p-4">
         {/* Card content */}
         <div className="flex w-full max-w-xs flex-col gap-4">
         {/* Header with remove button */}
@@ -1602,6 +1607,7 @@ export function PreLaunchCard({
           <Play size={16} fill="currentColor" />
           {slot.resumeSessionId ? "Resume Session" : "Launch Session"}
         </button>
+          </div>
         </div>
       </div>
     </div>
