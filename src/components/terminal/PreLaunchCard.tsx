@@ -420,9 +420,15 @@ export function PreLaunchCard({
   const selectedRepoName = selectedRepo?.name ?? getRepoDisplayName(selectedRepoPath ?? "");
 
   return (
-    <div className="content-dark terminal-cell flex h-full flex-col items-center justify-center bg-maestro-bg p-4">
-      {/* Card content */}
-      <div className="flex w-full max-w-xs flex-col gap-4">
+    // Scroll container and centering are split deliberately. A flex parent that
+    // both centres and scrolls clips the overflow at the top, putting the header
+    // out of reach — the inner wrapper's min-h-full centres while there is room
+    // and grows past it when the card is taller than the pane, which it often is
+    // once a branch list, MCP list and restore notes are all present.
+    <div className="content-dark terminal-cell h-full overflow-y-auto bg-maestro-bg">
+      <div className="flex min-h-full flex-col items-center justify-center p-4">
+        {/* Card content */}
+        <div className="flex w-full max-w-xs flex-col gap-4">
         {/* Header with remove button */}
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-maestro-text">Configure Session</span>
@@ -1596,6 +1602,7 @@ export function PreLaunchCard({
           <Play size={16} fill="currentColor" />
           {slot.resumeSessionId ? "Resume Session" : "Launch Session"}
         </button>
+        </div>
       </div>
     </div>
   );
