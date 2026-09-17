@@ -2,6 +2,8 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
+
+import type { PersistedPaneLayout } from "@/lib/paneSnapshot";
 import { arrayMove } from "@dnd-kit/sortable";
 import { killSession } from "@/lib/terminal";
 
@@ -48,6 +50,8 @@ export type WorkspaceTab = {
   repositories: RepositoryInfo[];
   selectedRepoPath: string | null;
   worktreeBasePath: string | null;
+  /** Snapshot of this project's panes, restored as pre-launch cards on next launch. */
+  paneLayout?: PersistedPaneLayout;
 };
 
 /** Read-only slice of the workspace store; persisted to disk via Zustand `persist`. */
@@ -74,6 +78,7 @@ type WorkspaceActions = {
   updateRepositories: (tabId: string, repositories: RepositoryInfo[]) => void;
   /** Set or clear a custom worktree base path for a project tab. */
   setWorktreeBasePath: (tabId: string, path: string | null) => void;
+  setPaneLayout: (tabId: string, layout: PersistedPaneLayout) => void;
   /** Reorder tabs by moving activeId to overId's position. Used by drag-and-drop. */
   reorderTabs: (activeId: string, overId: string) => void;
   /** Move a tab one position left or right. Used by keyboard shortcut. */
@@ -324,6 +329,14 @@ export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>()(
         });
       },
 
+      setPaneLayout: (tabId: string, layout: PersistedPaneLayout) => {
+        set({
+          tabs: get().tabs.map((t) =>
+            t.id === tabId ? { ...t, paneLayout: layout } : t
+          ),
+        });
+      },
+
       reorderTabs: (activeId: string, overId: string) => {
         if (activeId === overId) return;
         const { tabs } = get();
@@ -360,7 +373,7 @@ export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>()(
       name: "maestro-workspace",
       storage: createJSONStorage(() => tauriStorage),
       partialize: (state) => ({ tabs: state.tabs }),
-      version: 4,
+      version: 5,
       onRehydrateStorage: () => {
         return (state) => {
           if (state) {
@@ -405,6 +418,9 @@ export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>()(
             worktreeBasePath: t.worktreeBasePath ?? null,
           }));
         }
+
+        // v4 -> v5: Add paneLayout. No transformation needed — an absent
+        // paneLayout means "no panes to restore", which is the pre-v5 behaviour.
 
         return { ...state, tabs: tabs as WorkspaceTab[] };
       },
