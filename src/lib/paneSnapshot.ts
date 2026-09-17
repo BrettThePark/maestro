@@ -214,3 +214,15 @@ export function validateRestoredSlot(slot: SessionSlot, ctx: RestoreContext): Se
   next.restoreNotes = notes.length > 0 ? notes : undefined;
   return next;
 }
+
+/**
+ * Whether a tab has panes worth showing a grid for.
+ *
+ * `sessionsLaunched` is forced to false on every rehydrate, because PTYs do not
+ * survive a restart — but a saved layout means there are pre-launch cards to
+ * show, and sending the user to the idle landing screen would hide them behind
+ * a click that gives no hint they exist.
+ */
+export function hasRestorablePanes(layout: PersistedPaneLayout | null | undefined): boolean {
+  return (layout?.slots.length ?? 0) > 0;
+}

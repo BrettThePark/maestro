@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { fromPaneLayout, toPaneLayout } from "../paneSnapshot";
+import { fromPaneLayout, hasRestorablePanes, toPaneLayout } from "../paneSnapshot";
 import { buildGridTree, collectSlotIds, type RestoreAnchor } from "@/components/terminal/splitTree";
 import type { SessionSlot } from "@/components/terminal/PreLaunchCard";
 
@@ -140,5 +140,22 @@ describe("fromPaneLayout", () => {
     const restored = fromPaneLayout(layout);
     expect(collectSlotIds(restored!.tree)).toEqual(["a"]);
     expect(restored!.minimized.size).toBe(0);
+  });
+});
+
+describe("hasRestorablePanes", () => {
+  it("is false without a snapshot", () => {
+    expect(hasRestorablePanes(undefined)).toBe(false);
+    expect(hasRestorablePanes(null)).toBe(false);
+  });
+
+  it("is false for a snapshot with no slots", () => {
+    expect(hasRestorablePanes(toPaneLayout([], buildGridTree(["a"]), new Map(), {}))).toBe(false);
+  });
+
+  it("is true once there is a pane to restore", () => {
+    expect(hasRestorablePanes(toPaneLayout([slot("a")], buildGridTree(["a"]), new Map(), {}))).toBe(
+      true,
+    );
   });
 });
