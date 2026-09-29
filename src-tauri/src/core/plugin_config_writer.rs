@@ -17,6 +17,8 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
+use crate::core::hook_config_writer::{atomic_write, dir_lock};
+
 /// Merges `enabledPlugins` into an existing settings.local.json file.
 ///
 /// Preserves user-defined settings while replacing the `enabledPlugins` object.
@@ -75,6 +77,10 @@ pub async fn write_session_plugin_config(
             .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
     }
 
+    // Same lock and atomic write as the hooks writer, which edits this file too.
+    let lock = dir_lock(&claude_dir);
+    let _guard = lock.lock().await;
+
     // Merge with existing settings
     let settings_path = claude_dir.join("settings.local.json");
     let final_config = merge_with_existing(&settings_path, enabled_plugins)?;
@@ -83,9 +89,7 @@ pub async fn write_session_plugin_config(
     let content = serde_json::to_string_pretty(&final_config)
         .map_err(|e| format!("Failed to serialize plugin config: {}", e))?;
 
-    tokio::fs::write(&settings_path, content)
-        .await
-        .map_err(|e| format!("Failed to write settings.local.json: {}", e))?;
+    atomic_write(&settings_path, &content).await?;
 
     let enabled_count = enabled_plugins.values().filter(|v| **v).count();
     let disabled_count = enabled_plugins.len() - enabled_count;
@@ -112,6 +116,9 @@ pub async fn remove_session_plugin_config(working_dir: &Path) -> Result<(), Stri
     if !settings_path.exists() {
         return Ok(());
     }
+
+    let lock = dir_lock(&working_dir.join(".claude"));
+    let _guard = lock.lock().await;
 
     let content = tokio::fs::read_to_string(&settings_path)
         .await
@@ -140,9 +147,7 @@ pub async fn remove_session_plugin_config(working_dir: &Path) -> Result<(), Stri
         let output = serde_json::to_string_pretty(&config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-        tokio::fs::write(&settings_path, output)
-            .await
-            .map_err(|e| format!("Failed to write settings.local.json: {}", e))?;
+        atomic_write(&settings_path, &output).await?;
     }
 
     Ok(())
@@ -304,5 +309,46 @@ mod tests {
         // No .claude directory or settings file exists
         let result = remove_session_plugin_config(dir.path()).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_hook_and_plugin_removal_loses_neither() {
+        // Closing a pane fires both removals at once against the same file.
+        // Without a shared lock one read-modify-write overwrites the other and
+        // leaves stale hooks or plugins behind for the next launch.
+        for _ in 0..50 {
+            let dir = tempdir().unwrap();
+            let mut plugins = HashMap::new();
+            plugins.insert("plugin-a@official".to_string(), true);
+            crate::core::hook_config_writer::write_session_hooks_config(dir.path(), 1, 9900, "i")
+                .await
+                .unwrap();
+            write_session_plugin_config(dir.path(), &plugins)
+                .await
+                .unwrap();
+
+            let hooks_dir = dir.path().to_path_buf();
+            let plugins_dir = dir.path().to_path_buf();
+            let (a, b) = tokio::join!(
+                tokio::spawn(async move {
+                    crate::core::hook_config_writer::remove_session_hooks_config(&hooks_dir).await
+                }),
+                tokio::spawn(async move { remove_session_plugin_config(&plugins_dir).await }),
+            );
+            a.unwrap().unwrap();
+            b.unwrap().unwrap();
+
+            let settings_path = dir.path().join(".claude/settings.local.json");
+            if settings_path.exists() {
+                let config: Value =
+                    serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap())
+                        .unwrap();
+                assert!(config.get("hooks").is_none(), "hooks survived: {config}");
+                assert!(
+                    config.get("enabledPlugins").is_none(),
+                    "plugins survived: {config}"
+                );
+            }
+        }
     }
 }

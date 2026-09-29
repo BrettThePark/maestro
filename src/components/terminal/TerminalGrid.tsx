@@ -1004,13 +1004,27 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       }
     }
 
+    // .claude/settings.local.json is shared by every pane in this directory, so
+    // its plugin and hooks entries stay while another pane that uses them is
+    // still running here — removing them would strip that pane's plugins on its
+    // next reload, silence its status, and stop its conversation id from being
+    // recorded for restore.
+    const otherLivePaneHere = (modes: readonly AiMode[]) =>
+      slotsRef.current.some(
+        (s) =>
+          s.sessionId !== null &&
+          s.sessionId !== sessionId &&
+          modes.includes(s.mode) &&
+          (s.worktreePath || projectPath) === workingDir,
+      );
+
     // Clean up session-specific plugin config (fire-and-forget)
-    if (workingDir) {
+    if (workingDir && !otherLivePaneHere(["Claude", "OpenCode"])) {
       removeSessionPluginConfig(workingDir).catch(console.error);
     }
 
     // Clean up session-specific hooks config (fire-and-forget)
-    if (workingDir && slot?.mode === "Claude") {
+    if (workingDir && slot?.mode === "Claude" && !otherLivePaneHere(["Claude"])) {
       removeSessionHooksConfig(workingDir).catch(console.error);
     }
 

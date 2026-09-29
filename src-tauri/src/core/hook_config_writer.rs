@@ -15,7 +15,10 @@ use tokio::sync::Mutex;
 static DIR_LOCKS: LazyLock<DashMap<PathBuf, Arc<Mutex<()>>>> = LazyLock::new(DashMap::new);
 
 /// Acquire a per-directory lock for atomic settings.local.json operations.
-fn dir_lock(dir: &Path) -> Arc<Mutex<()>> {
+///
+/// Shared with `plugin_config_writer`: both edit the same file, and a lock
+/// held by only one of them does not stop the other overwriting its change.
+pub(crate) fn dir_lock(dir: &Path) -> Arc<Mutex<()>> {
     DIR_LOCKS
         .entry(dir.to_path_buf())
         .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -29,7 +32,7 @@ fn dir_lock(dir: &Path) -> Arc<Mutex<()>> {
 /// enabledMcpjsonServers). A plain in-place write can interleave with that and
 /// leave torn/invalid JSON; an atomic rename guarantees a reader always sees a
 /// complete file — never a partial mix.
-async fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
+pub(crate) async fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     let parent = path.parent().ok_or("No parent directory")?;
     let file_name = path
         .file_name()
@@ -57,11 +60,16 @@ async fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
 ///
 /// Note: PreToolUse is marked `"async": true` (fire-and-forget) so it doesn't
 /// block Claude Code. The other hooks do NOT have the async flag.
-fn build_hooks_config(session_id: u32, status_port: u16, instance_id: &str) -> Value {
+///
+/// The session id is read from `$MAESTRO_SESSION_ID` when the hook runs rather
+/// than written in here. Every pane launched in the same directory shares this
+/// one settings file, so a literal id would be whichever pane launched last,
+/// and every other pane's events would be reported under that pane's id.
+fn build_hooks_config(status_port: u16, instance_id: &str) -> Value {
     let base_url = format!("http://127.0.0.1:{}", status_port);
     let common_headers = format!(
-        "-H 'Content-Type: application/json' -H 'X-Maestro-Session: {}' -H 'X-Maestro-Instance: {}'",
-        session_id, instance_id
+        "-H 'Content-Type: application/json' -H \"X-Maestro-Session: ${{MAESTRO_SESSION_ID}}\" -H 'X-Maestro-Instance: {}'",
+        instance_id
     );
 
     let make_hook = |endpoint: &str, is_async: bool| -> Value {
@@ -104,7 +112,7 @@ fn build_hooks_config(session_id: u32, status_port: u16, instance_id: &str) -> V
 /// # Arguments
 ///
 /// * `working_dir` - Directory where `.claude/settings.local.json` will be written
-/// * `session_id` - Session identifier for the hook curl headers
+/// * `session_id` - Session being launched; logged only, the hooks read it from the env
 /// * `status_port` - Port of the Maestro HTTP status server
 /// * `instance_id` - UUID for this Maestro instance
 pub async fn write_session_hooks_config(
@@ -141,7 +149,7 @@ pub async fn write_session_hooks_config(
     };
 
     // Build and set hooks config
-    let hooks = build_hooks_config(session_id, status_port, instance_id);
+    let hooks = build_hooks_config(status_port, instance_id);
     config["hooks"] = hooks;
 
     // Write back
@@ -235,8 +243,8 @@ mod tests {
             command
         );
         assert!(
-            command.contains("X-Maestro-Session: 3"),
-            "SessionStart command should contain session_id 3, got: {}",
+            command.contains(r#"-H "X-Maestro-Session: ${MAESTRO_SESSION_ID}""#),
+            "SessionStart command should read the session id from the pane's env, got: {}",
             command
         );
         assert!(
@@ -249,6 +257,26 @@ mod tests {
             "SessionStart command should target /hook/session-start, got: {}",
             command
         );
+    }
+
+    #[tokio::test]
+    async fn test_hooks_identical_for_panes_sharing_a_directory() {
+        // Every pane launched in the same directory shares this one file. If the
+        // file names a session, the last launch wins and every other pane's
+        // Claude reports its conversation under that pane's id.
+        let dir = tempdir().unwrap();
+        let settings_path = dir.path().join(".claude/settings.local.json");
+
+        write_session_hooks_config(dir.path(), 4, 9900, "inst")
+            .await
+            .unwrap();
+        let first = std::fs::read_to_string(&settings_path).unwrap();
+        write_session_hooks_config(dir.path(), 6, 9900, "inst")
+            .await
+            .unwrap();
+        let second = std::fs::read_to_string(&settings_path).unwrap();
+
+        assert_eq!(first, second);
     }
 
     #[tokio::test]
@@ -334,7 +362,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_async_flag_on_pre_tool_use() {
-        let hooks = build_hooks_config(5, 7777, "instance-123");
+        let hooks = build_hooks_config(7777, "instance-123");
 
         // PreToolUse should have "async": true
         let pre_tool_hook = &hooks["PreToolUse"][0]["hooks"][0];
