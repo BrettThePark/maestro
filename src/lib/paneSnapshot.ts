@@ -230,3 +230,17 @@ export function validateRestoredSlot(slot: SessionSlot, ctx: RestoreContext): Se
 export function hasRestorablePanes(layout: PersistedPaneLayout | null | undefined): boolean {
   return (layout?.slots.length ?? 0) > 0;
 }
+
+/**
+ * Whether a tab renders the pane grid rather than the idle landing screen.
+ *
+ * The grid view and the bottom bar must agree on this. When they did not, a
+ * restored tab showed its panes while the bar still believed it was idle, and
+ * hid Add Session and disabled the Cmd+T shortcut.
+ */
+export function showsPaneGrid(
+  tab: { sessionsLaunched: boolean; paneLayout?: PersistedPaneLayout | null } | null | undefined,
+): boolean {
+  if (!tab) return false;
+  return tab.sessionsLaunched || hasRestorablePanes(tab.paneLayout);
+}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { fromPaneLayout, hasRestorablePanes, toPaneLayout } from "../paneSnapshot";
+import { fromPaneLayout, hasRestorablePanes, showsPaneGrid, toPaneLayout } from "../paneSnapshot";
 import { buildGridTree, collectSlotIds, type RestoreAnchor } from "@/components/terminal/splitTree";
 import type { SessionSlot } from "@/components/terminal/PreLaunchCard";
 
@@ -157,6 +157,26 @@ describe("hasRestorablePanes", () => {
     expect(hasRestorablePanes(toPaneLayout([slot("a")], buildGridTree(["a"]), new Map(), {}))).toBe(
       true,
     );
+  });
+});
+
+describe("showsPaneGrid", () => {
+  const restored = toPaneLayout([slot("a")], buildGridTree(["a"]), new Map(), {});
+
+  it("shows the grid for a restored layout even though sessionsLaunched was reset", () => {
+    expect(showsPaneGrid({ sessionsLaunched: false, paneLayout: restored })).toBe(true);
+  });
+
+  it("shows the grid once sessions are launched", () => {
+    expect(showsPaneGrid({ sessionsLaunched: true, paneLayout: undefined })).toBe(true);
+  });
+
+  it("shows the idle screen with nothing launched and nothing to restore", () => {
+    expect(showsPaneGrid({ sessionsLaunched: false, paneLayout: undefined })).toBe(false);
+  });
+
+  it("is false without a tab", () => {
+    expect(showsPaneGrid(undefined)).toBe(false);
   });
 });
 

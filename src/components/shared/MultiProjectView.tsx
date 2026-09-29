@@ -2,7 +2,7 @@ import { useRef, forwardRef, useImperativeHandle, useMemo } from "react";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 import { IdleLandingView } from "./IdleLandingView";
 import { TerminalGrid, type TerminalGridHandle } from "../terminal/TerminalGrid";
-import { hasRestorablePanes } from "@/lib/paneSnapshot";
+import { showsPaneGrid } from "@/lib/paneSnapshot";
 
 interface MultiProjectViewProps {
   onSessionCountChange?: (tabId: string, slotCount: number, launchedCount: number) => void;
@@ -150,7 +150,7 @@ export const MultiProjectView = forwardRef<MultiProjectViewHandle, MultiProjectV
               every rehydrate because PTYs do not survive a restart, but the
               restored pre-launch cards still belong on screen rather than
               behind the idle screen's Add button. */}
-          {tab.sessionsLaunched || hasRestorablePanes(tab.paneLayout) ? (
+          {showsPaneGrid(tab) ? (
             <TerminalGrid
               ref={gridRefSetters.get(tab.id)}
               tabId={tab.id}

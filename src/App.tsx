@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { GitFork, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getDeduplicatedCurrentBranch } from "@/lib/git";
+import { showsPaneGrid } from "@/lib/paneSnapshot";
 import { killSession } from "@/lib/terminal";
 import { useOpenProject } from "@/lib/useOpenProject";
 import { useFDAStore } from "@/stores/useFDAStore";
@@ -294,6 +295,9 @@ function App() {
 
   // Derive state from active tab
   const activeTabSessionsLaunched = activeTab?.sessionsLaunched ?? false;
+  // Restored panes put a tab in the grid before anything is launched, so the
+  // bottom bar and shortcuts must follow what is on screen, not the launch flag.
+  const activeTabInGridView = showsPaneGrid(activeTab);
   const activeTabCounts = activeTab ? sessionCounts.get(activeTab.id) : undefined;
   const activeTabSlotCount = activeTabCounts?.slotCount ?? 0;
   const activeTabLaunchedCount = activeTabCounts?.launchedCount ?? 0;
@@ -305,7 +309,7 @@ function App() {
 
   useAppKeyboard({
     onAddSession: handleAddSessionShortcut,
-    canAddSession: activeTabSessionsLaunched,
+    canAddSession: activeTabInGridView,
     onNextTab: switchToNextTab,
     onPrevTab: switchToPrevTab,
   });
@@ -441,7 +445,7 @@ function App() {
           {/* Bottom action bar */}
           <div className="bg-maestro-bg">
             <BottomBar
-              inGridView={activeTabSessionsLaunched}
+              inGridView={activeTabInGridView}
               slotCount={activeTabSlotCount}
               launchedCount={activeTabLaunchedCount}
               maxSessions={DEFAULT_SESSION_COUNT}
